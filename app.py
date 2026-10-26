@@ -29,7 +29,7 @@ st.set_page_config(
 )
 
 # ==========================================
-# 1. SISTEMA DE LOGIN (Autenticación)
+# 1. SISTEMA DE LOGIN (Autenticación Segura)
 # ==========================================
 if 'autenticado' not in st.session_state:
     st.session_state['autenticado'] = False
@@ -41,11 +41,19 @@ if not st.session_state['autenticado']:
     st.title("Portal de Ingeniería Geotécnica")
     st.subheader("Acceso al Sistema")
     
-    usuario = st.text_input("Usuario")
-    contrasena = st.text_input("Contraseña", type="password")
+    usuario_input = st.text_input("Usuario")
+    contrasena_input = st.text_input("Contraseña", type="password")
     
     if st.button("Ingresar"):
-        if usuario == "admin" and contrasena == "geotecnia2026":
+        # Lee las credenciales de st.secrets (o valores por defecto si corres en local)
+        try:
+            usuario_valido = st.secrets.get("USUARIO", "admin")
+            contrasena_valida = st.secrets.get("CONTRASENA", "geotecnia2026")
+        except Exception:
+            usuario_valido = "admin"
+            contrasena_valida = "geotecnia2026"
+        
+        if usuario_input == usuario_valido and contrasena_input == contrasena_valida:
             st.session_state['autenticado'] = True
             st.rerun()
         else:
