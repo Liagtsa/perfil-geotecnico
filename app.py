@@ -10,6 +10,14 @@ import os
 import textwrap
 from PIL import Image
 
+# Importación de los módulos especializados de cimentaciones profundas y memoria
+from cimentaciones_profundas import (
+    procesar_sondeo_completo,
+    generar_matrices_parametricas,
+    obtener_tabla_balasto_metro_a_metro
+)
+from generador_memoria_pdf import generar_memoria_calculo_pdf
+
 # ==========================================
 # 0. CONFIGURACIÓN DE PÁGINA E ICONO
 # ==========================================
@@ -23,9 +31,9 @@ else:
     icono_pestana = "🏗️"
 
 st.set_page_config(
-    page_title="Portal Geotécnico - Perfiles Estratigráficos",
+    page_title="Portal Geotécnico - Perfiles y Cimentaciones",
     page_icon=icono_pestana,
-    layout="centered"
+    layout="wide"
 )
 
 # ==========================================
@@ -35,33 +43,34 @@ if 'autenticado' not in st.session_state:
     st.session_state['autenticado'] = False
 
 if not st.session_state['autenticado']:
-    if os.path.exists(ruta_logo):
-        st.image(ruta_logo, width=180)
-    
-    st.title("Portal de Ingeniería Geotécnica")
-    st.subheader("Acceso al Sistema")
-    
-    usuario_input = st.text_input("Usuario")
-    contrasena_input = st.text_input("Contraseña", type="password")
-    
-    if st.button("Ingresar"):
-        # Lee las credenciales de st.secrets (o valores por defecto si corres en local)
-        try:
-            usuario_valido = st.secrets.get("USUARIO", "admin")
-            contrasena_valida = st.secrets.get("CONTRASENA", "geotecnia2026")
-        except Exception:
-            usuario_valido = "admin"
-            contrasena_valida = "geotecnia2026"
+    col_izq, col_centro, col_der = st.columns([1, 2, 1])
+    with col_centro:
+        if os.path.exists(ruta_logo):
+            st.image(ruta_logo, width=180)
         
-        if usuario_input == usuario_valido and contrasena_input == contrasena_valida:
-            st.session_state['autenticado'] = True
-            st.rerun()
-        else:
-            st.error("Usuario o contraseña incorrectos.")
+        st.title("Portal de Ingeniería Geotécnica")
+        st.subheader("Acceso al Sistema")
+        
+        usuario_input = st.text_input("Usuario")
+        contrasena_input = st.text_input("Contraseña", type="password")
+        
+        if st.button("Ingresar"):
+            try:
+                usuario_valido = st.secrets.get("USUARIO", "admin")
+                contrasena_valida = st.secrets.get("CONTRASENA", "geotecnia2026")
+            except Exception:
+                usuario_valido = "admin"
+                contrasena_valida = "geotecnia2026"
+            
+            if usuario_input == usuario_valido and contrasena_input == contrasena_valida:
+                st.session_state['autenticado'] = True
+                st.rerun()
+            else:
+                st.error("Usuario o contraseña incorrectos.")
     st.stop()
 
 # ==========================================
-# 2. MOTOR GEOTÉCNICO Y GENERADOR PDF
+# 2. MOTOR GEOTÉCNICO Y PERFIL ISO 710-2
 # ==========================================
 PROF_POR_PAGINA = 25.0
 
@@ -70,10 +79,16 @@ def generar_plantilla_excel():
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df_proy = pd.DataFrame({
             'Parametro': ['Proyecto', 'Elemento', 'Sondeo', 'Fecha', 'LogoURL', 
-                          'Coordenadas', 'Elevacion_Sup', 'Elevacion_Fondo', 'Rasante_Final', 'NAF', 'Fecha_NAF'],
+                          'Coordenadas', 'Elevacion_Sup', 'Elevacion_Fondo', 'Rasante_Final', 'NAF', 'Fecha_NAF',
+                          'Eficiencia_SPT', 'Diametro_Barrena_mm', 'Muestreador_Liner', 'Gamma_Default_kN_m3',
+                          'Diametro_Min_m', 'Diametro_Max_m', 'Diametro_Paso_m',
+                          'Longitud_Min_m', 'Longitud_Max_m', 'Longitud_Paso_m'],
             'Valor': ['ESTUDIO DE MECÁNICA DE SUELOS', 'SISTEMA DE TRANSPORTE POR CABLE', 'PERFIL ESTRATIGRÁFICO TORRE 11', 
                       'OCTUBRE 2026', 'logo_empresa.png', 
-                      'N 3,539,426   E 514,589   WGS84', '48.7 m (rel. MSL)', '16.7 m (rel. MSL)', '48.7 m (rel. MSL)', '5.8', '2026-10-08']
+                      'N 3,539,426   E 514,589   WGS84', '48.7 m (rel. MSL)', '16.7 m (rel. MSL)', '48.7 m (rel. MSL)', '5.8', '2026-10-08',
+                      '60', '100', 'CON_LINER', '18.0',
+                      '1.0', '2.0', '0.2',
+                      '15.0', '25.0', '1.0']
         })
         df_proy.to_excel(writer, sheet_name='Proyecto', index=False)
         
@@ -84,6 +99,7 @@ def generar_plantilla_excel():
             'SPT': ['15', '25', '50/10', 'TS', 'ABT', 'NQ'],
             'Recuperacion_cm': [45, 60, 50, 40, 30, 25],
             'RQD_cm': [np.nan, np.nan, np.nan, np.nan, 20, 18],
+            'Gamma_kN_m3': [17.5, 18.0, 18.5, 19.0, 22.0, 24.0],
             'Angulo_deg': [np.nan, 28, np.nan, np.nan, np.nan, 35],
             'Cohesion_kPa': [np.nan, 35, np.nan, np.nan, np.nan, 50],
             'UC_Roca_MPa': [np.nan, np.nan, np.nan, np.nan, 85, 120],
@@ -98,6 +114,7 @@ def generar_plantilla_excel():
             'LL': [25, 40, np.nan],
             'LP': [15, 20, np.nan],
             'SUCS': ['SC', 'CL', 'Roca'],
+            'Tipo_Mecanico': ['Friccionante', 'Cohesivo', 'Roca'],
             'Descripción': ['Arena arcillosa con grava.', 'Arcilla de baja plasticidad.', 'Fragmentos de roca basáltica.']
         })
         df_ind.to_excel(writer, sheet_name='PruebasIndice', index=False)
@@ -112,9 +129,9 @@ def procesar_spt(valor):
     if '/' in val_str:
         partes = val_str.split('/')
         try: return float(partes[0]), val_str
-        except: return np.nan, val_str
+        except Exception: return np.nan, val_str
     try: return float(val_str), ""
-    except: return np.nan, val_str
+    except Exception: return np.nan, val_str
 
 def obtener_patron(sucs):
     s = str(sucs).strip().upper()
@@ -187,7 +204,6 @@ def generar_pdf_desde_excel(archivo_excel):
                 1, 5, sharey=True, figsize=(12, 13), gridspec_kw={'width_ratios': [3.5, 1.2, 2.5, 0.8, 2]} 
             )
 
-            # Encabezado y Logotipo
             ax_logo = fig.add_axes([0.08, 0.89, 0.15, 0.08])
             ax_logo.axis('off')
             if os.path.exists(logo_url):
@@ -206,12 +222,10 @@ def generar_pdf_desde_excel(archivo_excel):
             fig.text(0.95, 0.925, f"PÁGINA: {num_pagina} / {total_paginas}", ha='right', fontsize=9, weight='bold')
             fig.lines.append(plt.Line2D([0.08, 0.95], [0.88, 0.88], transform=fig.transFigure, color='black', lw=1.5))
             
-            # Límites Eje Y
             ax_desc.invert_yaxis()
             ax_desc.set_ylim(y_max, y_min)
             ax_desc.set_yticks(np.arange(y_min, y_max + 1, 1))
 
-            # --- COLUMNA 1: Descripción ---
             ax_desc.set_title("DESCRIPCIÓN Y\nCLASIFICACIÓN (SUCS)", fontsize=9, weight='bold', y=1.03, va='bottom')
             ax_desc.set_xlim(0, 1)
             ax_desc.spines['right'].set_visible(False)
@@ -239,7 +253,6 @@ def generar_pdf_desde_excel(archivo_excel):
                     y_pos = (p_ini_vis + p_fin_vis) / 2.0
                     ax_desc.text(0.02, y_pos, textwrap.fill(texto, width=42), fontsize=7.5, verticalalignment='center')
 
-            # --- COLUMNA 2: Recuperación / RQD ---
             ax_rec.set_title("Recuperación /\nRQD (cm)", fontsize=9, weight='bold', y=1.03, va='bottom')
             ax_rec.set_xlim(0, 1)
             ax_rec.set_xticks([])
@@ -254,7 +267,6 @@ def generar_pdf_desde_excel(archivo_excel):
                     t_rqd = f"{int(rqd)}" if pd.notna(rqd) else "-"
                     if t_rec != "-" or t_rqd != "-": ax_rec.text(0.5, prof, f"{t_rec} / {t_rqd}", ha='center', va='center', fontsize=7.5)
 
-            # --- COLUMNA 3: Propiedades e Índices ---
             ax_prop.set_title("")
             ax_prop.set_xlim(0, 100)
             ax_prop.xaxis.set_ticks_position('bottom')
@@ -270,7 +282,6 @@ def generar_pdf_desde_excel(archivo_excel):
             ax_prop.plot(df_indice['LL'], df_indice['Prof_media'], marker='x', linestyle='None', color='black', markersize=5)
             ax_prop.plot(df_indice['LP'], df_indice['Prof_media'], marker='+', linestyle='None', color='black', markersize=6)
 
-            # NAF
             try:
                 naf = float(p_naf)
                 if pd.notna(naf) and y_min <= naf <= y_max:
@@ -306,7 +317,6 @@ def generar_pdf_desde_excel(archivo_excel):
             ax_kpa = crear_eje_superior(ax_prop, 1.035, (0, 200), [50, 100, 150, 200], "Cohesión ✿ (kPa)")
             ax_mpa = crear_eje_superior(ax_prop, 1.070, (0, 160), [40, 80, 120, 160], "RESISTENCIA ROCA: ■ UC_rock   ◎ PLT (MPa)")
 
-            # Graficación de Resistencia sin conflicto de variables
             df_deg = df_agua.dropna(subset=['Angulo_deg', 'Prof_media'])
             df_deg_p = df_deg[(df_deg['Prof_media'] >= y_min) & (df_deg['Prof_media'] <= y_max)]
             if not df_deg_p.empty:
@@ -327,7 +337,6 @@ def generar_pdf_desde_excel(archivo_excel):
             if not df_plt_p.empty:
                 ax_mpa.plot(df_plt_p['PLT_MPa'], df_plt_p['Prof_media'], marker='$◎$', color='black', linestyle='None', markersize=6.5, zorder=6)
 
-            # --- COLUMNA 4: Perfil ---
             ax_perfil.set_title("Perfil", fontsize=9, weight='bold', y=1.04, va='bottom')
             ax_perfil.set_xticks([])
             for _, row in df_indice.dropna(subset=['Prof_ini', 'Prof_fin']).iterrows():
@@ -337,7 +346,6 @@ def generar_pdf_desde_excel(archivo_excel):
                     rect = patches.Rectangle((0, p_ini_vis), 1, p_fin_vis - p_ini_vis, linewidth=1, edgecolor='black', facecolor=color, hatch=hatch)
                     ax_perfil.add_patch(rect)
 
-            # --- COLUMNA 5: SPT ---
             ax_spt.set_title("N (Golpes SPT)", fontsize=9, weight='bold', y=1.04, va='bottom')
             ax_spt.set_xlim(0, 60); ax_spt.xaxis.set_ticks_position('bottom'); ax_spt.tick_params(axis='x', labelsize=7, pad=2)
             ax_spt.grid(True, axis='x', color='gray', linestyle='--', alpha=0.4)
@@ -364,7 +372,6 @@ def generar_pdf_desde_excel(archivo_excel):
                 else:
                     for s in ['left', 'bottom', 'top']: ax_desc.spines[s].set_edgecolor('black'); ax_desc.spines[s].set_linewidth(1.2 if s=='top' else 1); ax_desc.spines[s].set_visible(True)
 
-            # --- PIE DE PLANO ---
             ax_foot = fig.add_axes([0.08, 0.015, 0.87, 0.065])
             ax_foot.set_xlim(0, 1); ax_foot.set_ylim(0, 1); ax_foot.set_xticks([]); ax_foot.set_yticks([])
             for s in ax_foot.spines.values(): s.set_edgecolor('black'); s.set_linewidth(1.0); s.set_visible(True)
@@ -394,33 +401,195 @@ def generar_pdf_desde_excel(archivo_excel):
     return pdf_buffer.getvalue()
 
 # ==========================================
-# 3. INTERFAZ GRÁFICA PRINCIPAL
+# 3. INTERFAZ GRÁFICA PRINCIPAL (CON PESTAÑAS)
 # ==========================================
-st.title("📄 Generador de Perfiles Estratigráficos")
-st.markdown("Herramienta técnica para generación de perfiles estratigráficos bajo la norma ISO 710-2.")
+st.title("🏗️ Portal de Ingeniería Geotécnica")
+st.caption("Generación de Perfiles Estratigráficos (ISO 710-2) y Diseño de Cimentaciones Profundas (NTC CDMX / Puebla)")
 
-st.markdown("### 1. Plantilla de Datos")
-st.info("Descarga la plantilla Excel con las columnas de resistencia y clasificación actualizadas.")
-st.download_button(
-    label="📥 Descargar Plantilla Excel",
-    data=generar_plantilla_excel(),
-    file_name="Datos_Sondeo.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-)
+tab_perfil, tab_cimentacion = st.tabs([
+    "📄 Perfil Estratigráfico ISO 710-2",
+    "🏗️ Capacidad de Pilas (Compresión / Tensión)"
+])
 
-st.markdown("### 2. Procesar Sondeo")
-archivo_subido = st.file_uploader("Sube tu archivo Excel lleno (.xlsx)", type=["xlsx"])
+with tab_perfil:
+    st.subheader("Generador de Perfil Estratigráfico")
+    st.markdown("Herramienta técnica para generación de perfiles estratigráficos bajo la norma ISO 710-2.")
 
-if archivo_subido is not None:
-    with st.spinner("Procesando datos y dibujando perfil..."):
+    st.markdown("### 1. Plantilla de Datos")
+    st.info("Descarga la plantilla Excel con las columnas de resistencia y clasificación actualizadas.")
+    st.download_button(
+        label="📥 Descargar Plantilla Excel",
+        data=generar_plantilla_excel(),
+        file_name="Datos_Sondeo.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
+    st.markdown("### 2. Procesar Sondeo")
+    archivo_subido = st.file_uploader("Sube tu archivo Excel lleno (.xlsx)", type=["xlsx"], key="uploader_perfil")
+
+    if archivo_subido is not None:
+        with st.spinner("Procesando datos y dibujando perfil..."):
+            try:
+                pdf_bytes = generar_pdf_desde_excel(archivo_subido)
+                st.success("¡Perfil generado exitosamente!")
+                st.download_button(
+                    label="📄 Descargar Perfil en PDF",
+                    data=pdf_bytes,
+                    file_name="Perfil_Estratigrafico_Final.pdf",
+                    mime="application/pdf"
+                )
+            except Exception as e:
+                st.error(f"Ocurrió un error al procesar el archivo: {e}")
+
+with tab_cimentacion:
+    st.header("Cálculo de Capacidad de Carga Profunda (NTC CDMX / Puebla)")
+    st.caption("Revisión a Compresión y Tensión/Extracción con correlaciones SPT e ICR/RQD en roca.")
+    
+    archivo_calc = st.file_uploader("Carga el archivo Datos_Sondeo.xlsx para cálculo", type=["xlsx"], key="calc_spt")
+    
+    if archivo_calc is not None:
         try:
-            pdf_bytes = generar_pdf_desde_excel(archivo_subido)
-            st.success("¡Perfil generado exitosamente!")
-            st.download_button(
-                label="📄 Descargar Perfil en PDF",
-                data=pdf_bytes,
-                file_name="Perfil_Estratigrafico_Final.pdf",
-                mime="application/pdf"
-            )
+            df_tramos, naf_val, cfg = procesar_sondeo_completo(archivo_calc)
+            st.success(f"Sondeo procesado: {len(df_tramos)} tramos analizados. Nivel Freático detectado: {naf_val} m")
+
+            with st.expander("Ver Perfil Mecánico Unificado (N60, (N1)60, ICR/RQD, qu, Litología)"):
+                cols_vis = ['Prof_ini', 'Prof_fin', 'SUCS', 'Tipo', 'N_campo', 'N60']
+                if 'ICR' in df_tramos.columns: cols_vis.append('ICR')
+                if 'qu_kPa' in df_tramos.columns: cols_vis.append('qu_kPa')
+                if 'Cu_lab' in df_tramos.columns: cols_vis.append('Cu_lab')
+                st.dataframe(df_tramos[cols_vis])
+
+            col1, col2 = st.columns(2)
+            with col1:
+                st.subheader("Rango de Diámetros (m)")
+                d_min = st.number_input("Diámetro Mínimo (m)", value=cfg['d_min'], min_value=0.40, step=0.10)
+                d_max = st.number_input("Diámetro Máximo (m)", value=cfg['d_max'], min_value=d_min, step=0.10)
+                paso_d = st.number_input("Paso de Diámetro (m)", value=cfg['d_paso'], min_value=0.05, step=0.05)
+
+            with col2:
+                st.subheader("Rango de Profundidades (m)")
+                l_min = st.number_input("Profundidad Mínima (m)", value=cfg['l_min'], min_value=1.0, step=0.5)
+                l_max = st.number_input("Profundidad Máxima (m)", value=cfg['l_max'], min_value=l_min, step=0.5)
+                paso_l = st.number_input("Paso de Profundidad (m)", value=cfg['l_paso'], min_value=0.5, step=0.5)
+
+            # Opciones de Geometría y Restricciones de Pilas Preperforadas
+            st.markdown("#### Configuración de Acampanamiento (Campana)")
+            chk_campana = st.checkbox("¿Considerar base acampanada en la punta?", value=False)
+            if chk_campana:
+                col_c1, col_c2 = st.columns(2)
+                with col_c1:
+                    rel_camp = st.slider("Relación D_base / D_fuste", min_value=1.2, max_value=2.5, value=1.5, step=0.1)
+                with col_c2:
+                    h_camp = st.number_input("Altura de la campana (m) [Mínimo 0.50 m NTC]", min_value=0.50, value=1.0, step=0.10)
+            else:
+                rel_camp = 1.0
+                h_camp = 0.0
+
+            st.info("ℹ️ **Restricciones aplicadas automáticamente:** Se desprecian los primeros 1.50 m de fuste y 1.0·D antes de la punta/campana (criterio FHWA-NHI-10-016 / NTC-CDMX).")
+
+            # Generación de listas de evaluación
+            if cfg['diametros_lista'] and cfg['diametros_lista'] != 'nan':
+                diametros = [float(x.strip()) for x in cfg['diametros_lista'].split(',') if x.strip()]
+            else:
+                diametros = np.arange(d_min, d_max + paso_d/2, paso_d).round(2).tolist()
+
+            if cfg['longitudes_lista'] and cfg['longitudes_lista'] != 'nan':
+                longitudes = [float(x.strip()) for x in cfg['longitudes_lista'].split(',') if x.strip()]
+            else:
+                longitudes = np.arange(l_min, l_max + paso_l/2, paso_l).round(2).tolist()
+
+            if st.button("Calcular Matrices de Capacidad y Rigidez", type="primary"):
+                matrices = generar_matrices_parametricas(
+                    df_tramos, naf_val, diametros, longitudes,
+                    con_campana=chk_campana, rel_campana=rel_camp, h_campana_m=h_camp
+                )
+                st.session_state['matrices_calculadas'] = matrices
+                st.session_state['diametros_calc'] = diametros
+                st.session_state['longitudes_calc'] = longitudes
+
+            if 'matrices_calculadas' in st.session_state:
+                matrices = st.session_state['matrices_calculadas']
+                d_calc = st.session_state.get('diametros_calc', diametros)
+                l_calc = st.session_state.get('longitudes_calc', longitudes)
+
+                st.markdown("### 1. Capacidad Reducida a Compresión: $R$ (Toneladas)")
+                st.caption(f"Evaluando {len(d_calc)} diámetros ({d_calc[0]} m a {d_calc[-1]} m) y {len(l_calc)} profundidades ({l_calc[0]} m a {l_calc[-1]} m). Considera estratos de suelo (CDMX/Puebla) y roca/fragmentos según ICR/RQD (NTC-CDMX 3.6.2.3.5).")
+                st.dataframe(matrices['matriz_compresion'].style.format("{:.1f} t").highlight_max(axis=0, color="#d4edda"))
+
+                st.markdown("### 2. Capacidad Reducida a Extracción / Tensión: $R_t$ (Toneladas)")
+                st.caption("Punta nula (Cp = 0) + Fuste reducido por tensión (0.80/0.60) + Peso propio neto del elemento.")
+                st.dataframe(matrices['matriz_extraccion'].style.format("{:.1f} t").highlight_max(axis=0, color="#fff3cd"))
+
+                st.markdown("### 3. Acero Longitudinal Mínimo Requerido por Tensión ($A_s$ en cm²)")
+                st.caption("Calculado para absorber el 100% de la carga de extracción admisible con fy = 4,200 kg/cm² y FR = 0.90.")
+                st.dataframe(matrices['matriz_acero'].style.format("{:.1f} cm²"))
+
+                col_k1, col_k2 = st.columns(2)
+                with col_k1:
+                    st.markdown("### 4. Módulo de Reacción Horizontal Promedio: $k_h$ (t/m³)")
+                    st.caption("Coeficiente de balasto lateral para modelado elasto-plástico del fuste.")
+                    st.dataframe(matrices['matriz_kh'].style.format("{:.1f} t/m³"))
+
+                with col_k2:
+                    st.markdown("### 5. Rigidez Axial en Cabeza: $K_v$ (t/cm)")
+                    st.caption("Constante del resorte vertical de la pila para apoyos en ETABS / SAP2000.")
+                    st.dataframe(matrices['matriz_Kv'].style.format("{:.2f} t/cm"))
+
+                # ----- SECCIÓN 6: MÓDULOS DE REACCIÓN METRO A METRO -----
+                st.markdown("---")
+                st.markdown("### 6. Módulos de Reacción Horizontal y Vertical Metro a Metro")
+                st.caption("Valores discretizados por metro para la asignación de resortes puntuales laterales (kh, Kh) y verticales (kv, Kv) en nudos de software estructural (ETABS, SAP2000, Midas, STAAD).")
+
+                col_sel1, col_sel2 = st.columns(2)
+                with col_sel1:
+                    sel_d = st.selectbox(
+                        "Selecciona Diámetro (D) a consultar",
+                        d_calc,
+                        index=len(d_calc) - 1,
+                        format_func=lambda x: f"D = {x:.2f} m"
+                    )
+                with col_sel2:
+                    sel_l = st.selectbox(
+                        "Selecciona Profundidad (L) a consultar",
+                        l_calc,
+                        index=len(l_calc) - 1,
+                        format_func=lambda x: f"L = {x:.2f} m"
+                    )
+
+                df_balasto_view = obtener_tabla_balasto_metro_a_metro(df_tramos, naf_val, sel_d, sel_l)
+                st.dataframe(df_balasto_view, use_container_width=True, hide_index=True)
+
+                csv_balasto = df_balasto_view.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label=f"📥 Descargar Tabla de Balasto (D={sel_d:.2f}m, L={sel_l:.2f}m) [.CSV]",
+                    data=csv_balasto,
+                    file_name=f"Balasto_Metro_a_Metro_D{sel_d:.2f}_L{sel_l:.2f}.csv",
+                    mime="text/csv"
+                )
+
+                # ----- GENERACIÓN Y DESCARGA DEL REPORTE PDF COMPLETO -----
+                st.markdown("---")
+                st.subheader("Generar Memoria de Cálculo en PDF")
+                st.caption("Memoria geotécnica formal con desglose estrato por estrato, balasto metro a metro y matrices de diseño.")
+
+                try:
+                    archivo_calc.seek(0)
+                    df_proy_temp = pd.read_excel(archivo_calc, sheet_name='Proyecto').set_index('Parametro')['Valor'].to_dict()
+                    nm_proy = str(df_proy_temp.get('Proyecto', 'ESTUDIO GEOTÉCNICO'))
+                    nm_elem = str(df_proy_temp.get('Elemento', 'DISEÑO DE CIMENTACIONES'))
+                    nm_fecha = str(df_proy_temp.get('Fecha', ''))
+                except Exception:
+                    nm_proy, nm_elem, nm_fecha = "PROYECTO", "CIMENTACIONES", ""
+
+                with st.spinner("Compilando memoria analítica en PDF..."):
+                    pdf_memoria_bytes = generar_memoria_calculo_pdf(df_tramos, matrices, nm_proy, nm_elem, nm_fecha)
+
+                st.download_button(
+                    label="📄 Descargar Memoria de Cálculo PDF",
+                    data=pdf_memoria_bytes,
+                    file_name="Memoria_Capacidad_Carga.pdf",
+                    mime="application/pdf",
+                    type="primary"
+                )
         except Exception as e:
-            st.error(f"Ocurrió un error al procesar el archivo: {e}")
+            st.error(f"Error al analizar el sondeo: {e}")
