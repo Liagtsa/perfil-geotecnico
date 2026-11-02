@@ -27,7 +27,6 @@ def crear_encabezado_memoria(fig, titulo_pagina, num_pagina, total_paginas, p_pr
     else:
         ax_logo.text(0.5, 0.5, '[ LOGO EMPRESA ]', ha='center', va='center', fontsize=8, color='navy', weight='bold')
     
-    # Textos institucionales con espaciado vertical corregido
     fig.text(0.30, 0.940, f"PROYECTO: {p_proy}", fontsize=10.0, weight='bold', color='navy')
     fig.text(0.30, 0.922, f"ELEMENTO: {p_elem}", fontsize=8.5)
     fig.text(0.30, 0.904, f"SONDEO: {p_sondeo}", fontsize=8.5)
@@ -37,8 +36,6 @@ def crear_encabezado_memoria(fig, titulo_pagina, num_pagina, total_paginas, p_pr
         p_fecha = datetime.datetime.now().strftime("%B %Y").upper()
     fig.text(0.95, 0.940, f"FECHA: {p_fecha}", ha='right', fontsize=8.5)
     fig.text(0.95, 0.904, f"PÁGINA: {num_pagina} / {total_paginas}", ha='right', fontsize=9, weight='bold')
-    
-    # Línea divisoria en cota inferior segura
     fig.lines.append(plt.Line2D([0.05, 0.95], [0.870, 0.870], transform=fig.transFigure, color='black', lw=1.5))
 
 # ==========================================================
@@ -301,7 +298,7 @@ def dibujar_esquemas(fig, D_val, L_val, naf_m):
 # ==========================================================
 def generar_memoria_calculo_pdf(df_tramos, matrices, p_proy, p_elem, *args, **kwargs):
     """
-    Soporta llamadas de 5 o 6 argumentos indistintamente:
+    Soporta llamadas flexibles de 5 o 6 argumentos indistintamente:
     - (df_tramos, matrices, p_proy, p_elem, p_fecha)
     - (df_tramos, matrices, p_proy, p_elem, p_sondeo, p_fecha)
     """
@@ -327,17 +324,17 @@ def generar_memoria_calculo_pdf(df_tramos, matrices, p_proy, p_elem, *args, **kw
     diametros = matriz_comp.columns.tolist()
     longitudes = matriz_comp.index.tolist()
     
-    # 1. Paginación controlada de la estratigrafía general (Máximo 25 filas por página para no traslaparse)
+    # Paginación proporcional y eficiente del registro estratigráfico:
+    # Hasta 42 filas caben holgadamente por página sin tocar el encabezado.
+    n_total_estratos = len(df_tramos)
+    num_pags_estratos = max(1, int(math.ceil(n_total_estratos / 42.0)))
+    filas_por_pag = int(math.ceil(n_total_estratos / float(num_pags_estratos)))
+    
     bloques_estratos = []
-    filas_estrato = []
-    for _, row in df_tramos.iterrows():
-        filas_estrato.append(row)
-        if len(filas_estrato) == 25:
-            bloques_estratos.append(pd.DataFrame(filas_estrato))
-            filas_estrato = []
-    if filas_estrato:
-        bloques_estratos.append(pd.DataFrame(filas_estrato))
-        
+    for i in range(num_pags_estratos):
+        sub = df_tramos.iloc[i * filas_por_pag : (i + 1) * filas_por_pag]
+        if not sub.empty:
+            bloques_estratos.append(sub)
     num_pags_estratos = len(bloques_estratos)
     
     # Sincronización de configuración
@@ -346,7 +343,7 @@ def generar_memoria_calculo_pdf(df_tramos, matrices, p_proy, p_elem, *args, **kw
     h_campana_m = matrices.get('h_campana_m', 1.0)
     naf_m = matrices.get('naf_m', None)
     
-    # 2. Desglose representativo de pilas
+    # Desglose representativo de pilas (8 casos estándar)
     casos_analisis = []
     for d in diametros:
         casos_analisis.append((d, longitudes[-1]))
@@ -361,17 +358,8 @@ def generar_memoria_calculo_pdf(df_tramos, matrices, p_proy, p_elem, *args, **kw
         for d, l in casos_analisis
     ]
     
-    # Contar las páginas totales pre-calculando los fragmentos
-    pags_por_desglose = []
-    for r in desgloses:
-        # Páginas de desglose de fricción (máx 20 filas por pág)
-        n_pags_fricc = max(1, int(math.ceil(len(r['desglose_estratos']) / 20.0)))
-        # Páginas de tabla de balasto (máx 25 filas por pág)
-        n_metros = int(math.ceil(r['L']))
-        n_pags_balasto = max(1, int(math.ceil(n_metros / 25.0)))
-        pags_por_desglose.append(n_pags_fricc + n_pags_balasto)
-        
-    total_paginas = 1 + num_pags_estratos + 1 + sum(pags_por_desglose) + 2
+    # Estructura ejecutiva: exactamente 2 páginas por caso (1 memoria axial + 1 balasto)
+    total_paginas = 1 + num_pags_estratos + 1 + (len(desgloses) * 2) + 2
     
     with PdfPages(pdf_buffer) as pdf:
         contador = 1
@@ -407,9 +395,9 @@ def generar_memoria_calculo_pdf(df_tramos, matrices, p_proy, p_elem, *args, **kw
         pdf.savefig(fig); plt.close(); contador += 1
 
         # --------------------------------------------------------
-        # PÁGINAS DE ESTRATIGRAFÍA (PAGINADAS 25 FILAS MAX)
+        # PÁGINAS DE ESTRATIGRAFÍA (MÁXIMO 42 FILAS, SIN TRASLAPE)
         # --------------------------------------------------------
-        for i_blq, sub_df in enumerate(bloques_estratos):
+        for sub_df in bloques_estratos:
             fig = plt.figure(figsize=(8.5, 11))
             z_ini_b, z_fin_b = sub_df['Prof_ini'].min(), sub_df['Prof_fin'].max()
             crear_encabezado_memoria(fig, f"REGISTRO ESTRATIGRÁFICO ({z_ini_b:.1f} m a {z_fin_b:.1f} m)", contador, total_paginas, p_proy, p_elem, p_sondeo, p_fecha)
@@ -418,9 +406,9 @@ def generar_memoria_calculo_pdf(df_tramos, matrices, p_proy, p_elem, *args, **kw
                 f"2. PERFIL ESTRATIGRÁFICO Y RESULTADOS SPT (Tramo {z_ini_b:.1f} m a {z_fin_b:.1f} m)\n"
                 f"====================================================================================\n"
             )
-            fig.text(0.08, 0.84, sub_title, va='top', ha='left', fontsize=8.5, family='monospace')
+            fig.text(0.08, 0.840, sub_title, va='top', ha='left', fontsize=8.0, family='monospace')
             
-            ax_tab_est = fig.add_axes([0.08, 0.10, 0.84, 0.68])
+            ax_tab_est = fig.add_axes([0.08, 0.06, 0.84, 0.74])
             ax_tab_est.axis('off')
             
             headers_e = ["Profundidad (m)", "Espesor (m)", "SUCS", "Comportamiento", "N campo (golpes)", "N60 corregido"]
@@ -438,8 +426,12 @@ def generar_memoria_calculo_pdf(df_tramos, matrices, p_proy, p_elem, *args, **kw
             t_est = ax_tab_est.table(cellText=[headers_e] + filas_e, loc='center', cellLoc='center',
                                      colWidths=[0.20, 0.14, 0.14, 0.22, 0.15, 0.15])
             t_est.auto_set_font_size(False)
-            t_est.set_fontsize(8.0 if len(filas_e) > 15 else 8.5)
-            t_est.scale(1, 1.4)
+            n_e = len(filas_e)
+            f_sz = 7.0 if n_e > 35 else (7.5 if n_e > 25 else 8.0)
+            sc_y = 1.05 if n_e > 35 else (1.2 if n_e > 25 else 1.35)
+            t_est.set_fontsize(f_sz)
+            t_est.scale(1, sc_y)
+            
             for j in range(6):
                 t_est[0, j].set_facecolor('navy'); t_est[0, j].set_text_props(color='white', weight='bold')
             for r_idx in range(1, len(filas_e) + 1):
@@ -475,129 +467,111 @@ def generar_memoria_calculo_pdf(df_tramos, matrices, p_proy, p_elem, *args, **kw
         pdf.savefig(fig); plt.close(); contador += 1
 
         # --------------------------------------------------------
-        # PÁGINAS DE DESGLOSE: CÁLCULO POR CÁLCULO
+        # PÁGINAS DE DESGLOSE: EXACTAMENTE 2 PÁGINAS POR CASO
         # --------------------------------------------------------
         for idx_caso, r in enumerate(desgloses):
             
-            # --- PAGINACIÓN DE FRICCIÓN (20 FILAS MAX) ---
-            filas_friccion = r['desglose_estratos']
-            chunks_f = [filas_friccion[i:i + 20] for i in range(0, len(filas_friccion), 20)]
+            # --- HOJA 1 DEL CASO: MEMORIA DE CÁLCULO ANALÍTICA (1 PÁGINA) ---
+            fig = plt.figure(figsize=(8.5, 11))
+            crear_encabezado_memoria(fig, f"DESGLOSE CAPACIDAD AXIAL (Caso {idx_caso+1} de {len(desgloses)})", contador, total_paginas, p_proy, p_elem, p_sondeo, p_fecha)
             
-            for i_chunk, chunk in enumerate(chunks_f):
-                fig = plt.figure(figsize=(8.5, 11))
-                crear_encabezado_memoria(fig, f"DESGLOSE CAPACIDAD AXIAL (Caso {idx_caso+1} de {len(desgloses)} - Pág {i_chunk+1})", contador, total_paginas, p_proy, p_elem, p_sondeo, p_fecha)
-                
-                info_pila = (
-                    f" > PILA PROFUNDA: Diámetro D = {r['D']:.2f} m | Longitud L = {r['L']:.2f} m\n"
-                    f"   - Perímetro Fuste: {r['Perimetro']:.2f} m | Área Punta (Ap): {r['Area_punta']:.3f} m² | Peso Concreto (W): {r['W_concreto_ton']:.1f} t\n"
-                    f"   - Zona Activa Fuste: {r['z_act_ini']:.2f} m a {r['z_act_fin']:.2f} m (Longitud Efectiva = {r['L_fuste_activa']:.2f} m)\n"
-                    f"   A. INTEGRACIÓN DE RESISTENCIA POR FRICCIÓN LATERAL ESTRATO POR ESTRATO:"
-                )
-                fig.text(0.08, 0.84, info_pila, va='top', ha='left', fontsize=8.0, family='monospace')
-                
-                alto_tabla = 0.04 + (0.02 * len(chunk))
-                ax_tab_f = fig.add_axes([0.08, 0.77 - alto_tabla, 0.84, alto_tabla])
-                ax_tab_f.axis('off')
-                
-                h_f = ["Tramo (m)", "L.Efec", "SUCS", "Comportamiento", "N60", "fui (kPa)", "FR", "F_nom (t)", "F_red (t)"]
-                d_f = []
-                for e in chunk:
-                    d_f.append([
-                        f"{e['zt']:.2f}-{e['zb']:.2f}", f"{e['l_efec']:.2f}m", str(e['sucs']), str(e['tipo']),
-                        f"{e['n60']:.1f}", f"{e['fui_kpa']:.1f}", f"{e['fr_f']:.2f}",
-                        f"{e['f_nom_ton']:.1f}", f"{e['f_red_ton']:.1f}"
-                    ])
-                    
-                t_f = ax_tab_f.table(cellText=[h_f] + d_f, loc='center', cellLoc='center',
-                                     colWidths=[0.14, 0.09, 0.08, 0.18, 0.09, 0.12, 0.08, 0.11, 0.11])
-                t_f.auto_set_font_size(False)
-                t_f.set_fontsize(7.5)
-                t_f.scale(1, 1.2)
-                for j in range(9):
-                    t_f[0, j].set_facecolor('navy'); t_f[0, j].set_text_props(color='white', weight='bold')
-                for r_i in range(1, len(d_f) + 1):
-                    if r_i % 2 == 0:
-                        for c_i in range(9): t_f[r_i, c_i].set_facecolor('#f4f4f4')
-                
-                if i_chunk == len(chunks_f) - 1:
-                    resumen_axial = (
-                        f"   Fricción Nominal Total (Ruf) = {r['Cf_nom_ton']:.1f} t  |  Fricción Reducida a Compresión (Cf) = {r['Cf_comp_ton']:.1f} t\n\n"
-                        f"   B. CAPACIDAD EN LA BASE / PUNTA (Cota de Desplante -{r['L']:.2f} m):\n"
-                        f"      - Estrato de apoyo: {r['detalles_punta']} [{r['norma_punta']}]\n"
-                        f"      - Esfuerzo unitario de punta: pu = {r['pu_kpa']:.1f} kPa ({r['pu_ton_m2']:.1f} t/m²)\n"
-                        f"      - Capacidad Nominal Punta: Rup = pu * Ap = {r['Rup_ton']:.1f} t  |  Reducida (FR = 0.35): Cp = {r['Cp_comp_ton']:.1f} t\n\n"
-                        f"   C. REVISIÓN DE CAPACIDAD DE CARGA A COMPRESIÓN:\n"
-                        f"      => CAPACIDAD RESISTENTE REDUCIDA TOTAL (R = Cf + Cp) = {r['R_comp_ton']:.1f} toneladas\n\n"
-                        f"   D. REVISIÓN A TENSIÓN / EXTRACCIÓN (NTC CDMX 3.6.3.2):\n"
-                        f"      - Fricción reducida a tensión (castigo 0.80/0.60): Cf_tens = {r['Cf_tens_ton']:.1f} t  (Cp = 0.0 t)\n"
-                        f"      - Peso neto del concreto (descontando flotación bajo NAF): W = {r['W_concreto_ton']:.1f} t\n"
-                        f"      => CAPACIDAD RESISTENTE A TENSIÓN (Rt = Cf_tens + W) = {r['R_tens_ton']:.1f} toneladas\n"
-                        f"      => Acero Longitudinal Mínimo (As = Rt / (0.90 * fy)) = {r['As_tensin_cm2']:.1f} cm² (fy = 4,200 kg/cm²)\n\n"
-                        f"   E. RIGIDEZ GLOBAL E INTERACCIÓN SUELO-ESTRUCTURA:\n"
-                        f"      - Módulo de balasto lateral promedio en fuste: kh_prom = {r['kh_prom_t_m3']:.1f} t/m³ (Kh = {r['Kh_lineal_t_m']:.1f} t/m)\n"
-                        f"      - Rigidez Axial Vertical en Cabeza (Resorte Kv): {r['Kv_cabeza_t_cm']:.2f} t/cm ({r['Kv_cabeza_t_cm']*100:.0f} t/m)"
-                    )
-                    fig.text(0.08, 0.73 - alto_tabla, resumen_axial, va='top', ha='left', fontsize=8.0, family='monospace')
-                
-                pdf.savefig(fig); plt.close(); contador += 1
+            texto_caso = (
+                f"2. MEMORIA DE CÁLCULO DETALLADA — CAPACIDAD AXIAL (Caso {idx_caso+1})\n"
+                f"====================================================================================\n"
+                f" > PILA PROFUNDA: Diámetro D = {r['D']:.2f} m | Longitud L = {r['L']:.2f} m\n"
+                f"   Perímetro Fuste: {r['Perimetro']:.2f} m | Área Punta (Ap): {r['Area_punta']:.3f} m²\n"
+                f"   Volumen Concreto: {(r['Area_fuste']*r['L']):.2f} m³ | Peso Concreto Neto (W): {r['W_concreto_ton']:.1f} t\n"
+                f"   Criterio de Fuste: 1.50 m superior y 1.0·D en la base anulados (FHWA-NHI-10-016)\n"
+                f"   Zona Activa de Fuste: {r['z_act_ini']:.2f} m a {r['z_act_fin']:.2f} m (Longitud Efectiva = {r['L_fuste_activa']:.2f} m)\n\n"
+                f"A. INTEGRACIÓN DE RESISTENCIA POR FRICCIÓN LATERAL:\n"
+                f"   - Sumatoria de Fricción Nominal Acumulada (Ruf) = {r['Cf_nom_ton']:.1f} toneladas\n"
+                f"   - Factor de Resistencia de Fuste aplicado: FR = 0.50 (Arenas) / 0.70 (Arcillas)\n"
+                f"   => CAPACIDAD REDUCIDA POR FRICCIÓN (Cf = sum FR · F_nom) = {r['Cf_comp_ton']:.1f} toneladas\n\n"
+                f"B. CAPACIDAD DE CARGA EN LA BASE / PUNTA (Cota de Desplante -{r['L']:.2f} m):\n"
+                f"   - Estrato de apoyo: {r['detalles_punta']} [{r['norma_punta']}]\n"
+                f"   - Resistencia unitaria última de punta: pu = {r['pu_kpa']:.1f} kPa ({r['pu_ton_m2']:.1f} t/m²)\n"
+                f"   - Capacidad Nominal de Punta: Rup = pu * Ap = {r['Rup_ton']:.1f} toneladas\n"
+                f"   - Factor de Resistencia de Punta: FR_p = 0.35 (NTC CDMX / Puebla)\n"
+                f"   => CAPACIDAD REDUCIDA POR PUNTA (Cp = 0.35 * Rup) = {r['Cp_comp_ton']:.1f} toneladas\n\n"
+                f"C. REVISIÓN DE ESTADO LÍMITE DE FALLA A COMPRESIÓN:\n"
+                f"   - Ecuación: R = Cf + Cp = {r['Cf_comp_ton']:.1f} t + {r['Cp_comp_ton']:.1f} t\n"
+                f"   => CAPACIDAD RESISTENTE REDUCIDA TOTAL (R) = {r['R_comp_ton']:.1f} TONELADAS\n\n"
+                f"D. REVISIÓN A TENSIÓN / EXTRACCIÓN (NTC CDMX 3.6.3.2):\n"
+                f"   - Fricción reducida a tensión (castigo 0.80/0.60): Cf_tens = {r['Cf_tens_ton']:.1f} t (Punta Cp = 0.0 t)\n"
+                f"   - Peso propio neto del concreto (descontando subpresión bajo NAF): W = {r['W_concreto_ton']:.1f} t\n"
+                f"   - Ecuación: Rt = Cf_tens + W = {r['Cf_tens_ton']:.1f} t + {r['W_concreto_ton']:.1f} t\n"
+                f"   => CAPACIDAD RESISTENTE A TENSIÓN (Rt) = {r['R_tens_ton']:.1f} TONELADAS\n"
+                f"   => Acero Longitudinal Mínimo Requerido (As = Rt / (0.90 * fy)) = {r['As_tensin_cm2']:.1f} cm²\n"
+                f"      (Considerando acero de refuerzo con fy = 4,200 kg/cm² y FR = 0.90)\n\n"
+                f"E. RIGIDEZ GLOBAL E INTERACCIÓN SUELO-ESTRUCTURA:\n"
+                f"   - Módulo de balasto lateral promedio ponderado en fuste: kh_prom = {r['kh_prom_t_m3']:.1f} t/m³\n"
+                f"   - Rigidez lateral distribuida promedio: Kh_lineal = {r['Kh_lineal_t_m']:.1f} t/m\n"
+                f"   - Rigidez Axial Vertical en Cabeza (Resorte Point Spring para software):\n"
+                f"     Kv = {r['Kv_cabeza_t_cm']:.2f} t/cm ({r['Kv_cabeza_t_cm']*100:.0f} t/m)\n\n"
+                f"   * Nota: En la siguiente página se presenta la tabla de balasto (kh, kv) metro a metro."
+            )
+            fig.text(0.08, 0.84, texto_caso, va='top', ha='left', fontsize=8.2, family='monospace')
+            pdf.savefig(fig); plt.close(); contador += 1
 
-            # --- HOJA 2: MÓDULOS DE REACCIÓN METRO A METRO (PAGINADOS A 25 FILAS MAX) ---
-            n_metros_totales = int(math.ceil(r['L']))
-            z_cursor_kh = 1
+            # --- HOJA 2 DEL CASO: TABLA DE BALASTO METRO A METRO (1 PÁGINA) ---
+            fig = plt.figure(figsize=(8.5, 11))
+            n_m = int(math.ceil(r['L']))
+            crear_encabezado_memoria(fig, f"BALASTO Y RESORTES METRO A METRO (1 a {n_m} m)", contador, total_paginas, p_proy, p_elem, p_sondeo, p_fecha)
             
-            while z_cursor_kh <= n_metros_totales:
-                z_fin_kh_bloque = min(z_cursor_kh + 24, n_metros_totales)
-                
-                fig = plt.figure(figsize=(8.5, 11))
-                crear_encabezado_memoria(fig, f"BALASTO Y RESORTES METRO A METRO ({z_cursor_kh} a {z_fin_kh_bloque} m)", contador, total_paginas, p_proy, p_elem, p_sondeo, p_fecha)
-                
-                info_balasto = (
-                    f" > ANÁLISIS DE RESORTES LATERALES Y VERTICALES (D = {r['D']:.2f} m | L = {r['L']:.2f} m)\n"
-                    f"   TABLA DE COEFICIENTES DE BALASTO (kh, kv) Y RIGIDECES (Kh, Kv) - TRAMO {z_cursor_kh}.00 m A {z_fin_kh_bloque}.00 m:"
-                )
-                fig.text(0.08, 0.84, info_balasto, va='top', ha='left', fontsize=8.0, family='monospace')
-                
-                ax_tab_kh = fig.add_axes([0.08, 0.12, 0.84, 0.68])
-                ax_tab_kh.axis('off')
-                
-                h_kh = ["Prof. z (m)", "SUCS", "Comportamiento", "kh (t/m³)", "Kh lineal (t/m)", "kv (t/m³)", "Kv lineal (t/m)"]
-                d_kh = []
-                
-                for z_i in range(z_cursor_kh, z_fin_kh_bloque + 1):
-                    z_flt = min(float(z_i), r['L'])
-                    e_match = None
-                    for e_item in r['desglose_estratos']:
-                        if e_item['zt'] < z_flt <= e_item['zb'] or (e_item['zt'] == 0 and z_flt == 0):
-                            e_match = e_item
-                            break
-                    if e_match is None: e_match = r['desglose_estratos'][-1]
-                        
-                    kh_v = e_match['kh_local']
-                    kh_lin = kh_v * r['D']
+            info_balasto = (
+                f" > ANÁLISIS DE RESORTES LATERALES Y VERTICALES (D = {r['D']:.2f} m | L = {r['L']:.2f} m)\n"
+                f"   Rigidez lateral: Kh = kh * D (t/m) | Rigidez vertical: Kv_lin = kv * D (t/m) | Resorte en Cabeza: Kv = {r['Kv_cabeza_t_cm']:.2f} t/cm\n"
+                f"   TABLA DE COEFICIENTES DE BALASTO (kh, kv) Y RIGIDECES (Kh, Kv) - TRAMO 1.00 m A {n_m}.00 m:"
+            )
+            fig.text(0.08, 0.840, info_balasto, va='top', ha='left', fontsize=8.0, family='monospace')
+            
+            ax_tab_kh = fig.add_axes([0.08, 0.14, 0.84, 0.67])
+            ax_tab_kh.axis('off')
+            
+            h_kh = ["Prof. z (m)", "SUCS", "Comportamiento", "kh (t/m³)", "Kh lineal (t/m)", "kv (t/m³)", "Kv lineal (t/m)"]
+            d_kh = []
+            
+            for z_i in range(1, n_m + 1):
+                z_flt = min(float(z_i), r['L'])
+                e_match = None
+                for e_item in r['desglose_estratos']:
+                    if e_item['zt'] < z_flt <= e_item['zb'] or (e_item['zt'] == 0 and z_flt == 0):
+                        e_match = e_item
+                        break
+                if e_match is None: e_match = r['desglose_estratos'][-1]
                     
-                    if e_match['tipo'] == 'Roca': kv_v = kh_v * 1.0
-                    elif e_match['tipo'] == 'Friccionante': kv_v = kh_v * 0.85
-                    else: kv_v = kh_v * 1.2
-                    kv_lin = kv_v * r['D']
+                kh_v = e_match['kh_local']
+                kh_lin = kh_v * r['D']
+                if e_match['tipo'] == 'Roca': kv_v = kh_v * 1.0
+                elif e_match['tipo'] == 'Friccionante': kv_v = kh_v * 0.85
+                else: kv_v = kh_v * 1.2
+                kv_lin = kv_v * r['D']
+                
+                d_kh.append([
+                    f"-{z_flt:.2f} m", str(e_match['sucs']), str(e_match['tipo']),
+                    f"{kh_v:.1f}", f"{kh_lin:.1f}", f"{kv_v:.1f}", f"{kv_lin:.1f}"
+                ])
+                
+            t_kh = ax_tab_kh.table(cellText=[h_kh] + d_kh, loc='center', cellLoc='center',
+                                   colWidths=[0.16, 0.10, 0.18, 0.14, 0.14, 0.14, 0.14])
+            t_kh.auto_set_font_size(False)
+            t_kh.set_fontsize(7.2 if len(d_kh) > 25 else 7.5)
+            t_kh.scale(1, 1.15 if len(d_kh) > 25 else 1.3)
+            
+            for j in range(7):
+                t_kh[0, j].set_facecolor('navy'); t_kh[0, j].set_text_props(color='white', weight='bold')
+            for r_idx in range(1, len(d_kh) + 1):
+                if r_idx % 2 == 0:
+                    for c_idx in range(7): t_kh[r_idx, c_idx].set_facecolor('#f4f4f4')
                     
-                    d_kh.append([
-                        f"-{z_flt:.2f} m", str(e_match['sucs']), str(e_match['tipo']),
-                        f"{kh_v:.1f}", f"{kh_lin:.1f}", f"{kv_v:.1f}", f"{kv_lin:.1f}"
-                    ])
-                    
-                t_kh = ax_tab_kh.table(cellText=[h_kh] + d_kh, loc='center', cellLoc='center',
-                                       colWidths=[0.16, 0.10, 0.18, 0.14, 0.14, 0.14, 0.14])
-                t_kh.auto_set_font_size(False)
-                t_kh.set_fontsize(7.5)
-                t_kh.scale(1, 1.3)
-                for j in range(7):
-                    t_kh[0, j].set_facecolor('navy'); t_kh[0, j].set_text_props(color='white', weight='bold')
-                for r_idx in range(1, len(d_kh) + 1):
-                    if r_idx % 2 == 0:
-                        for c_idx in range(7): t_kh[r_idx, c_idx].set_facecolor('#f4f4f4')
-                        
-                pdf.savefig(fig); plt.close(); contador += 1
-                z_cursor_kh = z_fin_kh_bloque + 1
+            nota_b = (
+                f"NOTA PARA EL MODELO ESTRUCTURAL:\n"
+                f"Módulo de Balasto Promedio en Fuste: kh_prom = {r['kh_prom_t_m3']:.1f} t/m³ (Kh_prom = {r['Kh_lineal_t_m']:.1f} t/m).\n"
+                f"Se recomienda asignar resortes puntuales en los nudos del fuste cada metro empleando las columnas 'Kh lineal' y 'Kv lineal'."
+            )
+            fig.text(0.08, 0.08, nota_b, va='top', ha='left', fontsize=7.5, family='monospace')
+            
+            pdf.savefig(fig); plt.close(); contador += 1
 
         # --------------------------------------------------------
         # PÁGINA: GRÁFICAS DE COMPORTAMIENTO GEOTÉCNICO
