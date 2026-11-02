@@ -27,16 +27,19 @@ def crear_encabezado_memoria(fig, titulo_pagina, num_pagina, total_paginas, p_pr
     else:
         ax_logo.text(0.5, 0.5, '[ LOGO EMPRESA ]', ha='center', va='center', fontsize=8, color='navy', weight='bold')
     
-    fig.text(0.30, 0.935, f"PROYECTO: {p_proy}", fontsize=10.5, weight='bold', color='navy')
-    fig.text(0.30, 0.915, f"ELEMENTO: {p_elem}", fontsize=9)
-    fig.text(0.30, 0.895, f"SONDEO: {p_sondeo}", fontsize=9)
-    fig.text(0.30, 0.875, f"MEMORIA TÉCNICA: {titulo_pagina}", fontsize=8.5, color='dimgray')
+    # Textos institucionales con espaciado vertical corregido
+    fig.text(0.30, 0.940, f"PROYECTO: {p_proy}", fontsize=10.0, weight='bold', color='navy')
+    fig.text(0.30, 0.922, f"ELEMENTO: {p_elem}", fontsize=8.5)
+    fig.text(0.30, 0.904, f"SONDEO: {p_sondeo}", fontsize=8.5)
+    fig.text(0.30, 0.884, f"MEMORIA TÉCNICA: {titulo_pagina}", fontsize=8.0, color='dimgray')
     
     if not p_fecha:
         p_fecha = datetime.datetime.now().strftime("%B %Y").upper()
-    fig.text(0.95, 0.935, f"FECHA: {p_fecha}", ha='right', fontsize=8.5)
-    fig.text(0.95, 0.900, f"PÁGINA: {num_pagina} / {total_paginas}", ha='right', fontsize=9, weight='bold')
-    fig.lines.append(plt.Line2D([0.05, 0.95], [0.875, 0.875], transform=fig.transFigure, color='black', lw=1.5))
+    fig.text(0.95, 0.940, f"FECHA: {p_fecha}", ha='right', fontsize=8.5)
+    fig.text(0.95, 0.904, f"PÁGINA: {num_pagina} / {total_paginas}", ha='right', fontsize=9, weight='bold')
+    
+    # Línea divisoria en cota inferior segura
+    fig.lines.append(plt.Line2D([0.05, 0.95], [0.870, 0.870], transform=fig.transFigure, color='black', lw=1.5))
 
 # ==========================================================
 # 2. MOTOR DE DESGLOSE ANALÍTICO DETALLADO
@@ -169,7 +172,7 @@ def desglosar_calculo_pila(df_tramos, naf_m, diametro_m, longitud_m,
         detalles_punta = f"Arena (N60_punta={n60_punta:.1f} en 2D)"
         norma_punta = "NTC CDMX Arenas"
     else:
-        cu_p = estrato_p['Cu_lab'] if (pd.notna(estrato_p.get('Cu_lab')) and estrato_p['Cu_lab'] > 0) else (factor_cu_spt * estrato_p['N60'])
+        cu_p = estrato_p['Cu_lab'] if (pd.notna(estrato_p.get('Cu_lab')) and estrato_p['Cu_lab'] > 0) else (factor_cu_spt * n60)
         fre = (d_punta + 1.0) / (2.0 * d_punta + 1.0) if d_punta > 0.5 else 1.0
         fr_p = 0.35
         pu_kpa = (cu_p * 9.0 * fr_p + pv_total) * fre / fr_p
@@ -296,7 +299,22 @@ def dibujar_esquemas(fig, D_val, L_val, naf_m):
 # ==========================================================
 # 4. FUNCIÓN PRINCIPAL GENERADORA DE LA MEMORIA
 # ==========================================================
-def generar_memoria_calculo_pdf(df_tramos, matrices, p_proy, p_elem, p_sondeo, p_fecha):
+def generar_memoria_calculo_pdf(df_tramos, matrices, p_proy, p_elem, *args, **kwargs):
+    """
+    Soporta llamadas de 5 o 6 argumentos indistintamente:
+    - (df_tramos, matrices, p_proy, p_elem, p_fecha)
+    - (df_tramos, matrices, p_proy, p_elem, p_sondeo, p_fecha)
+    """
+    if len(args) >= 2:
+        p_sondeo = str(args[0])
+        p_fecha = str(args[1])
+    elif len(args) == 1:
+        p_sondeo = str(kwargs.get('p_sondeo', 'SONDEO 1'))
+        p_fecha = str(args[0])
+    else:
+        p_sondeo = str(kwargs.get('p_sondeo', 'SONDEO 1'))
+        p_fecha = str(kwargs.get('p_fecha', ''))
+        
     pdf_buffer = io.BytesIO()
     
     matriz_comp = matrices['matriz_compresion']
@@ -477,7 +495,6 @@ def generar_memoria_calculo_pdf(df_tramos, matrices, p_proy, p_elem, p_sondeo, p
                 )
                 fig.text(0.08, 0.84, info_pila, va='top', ha='left', fontsize=8.0, family='monospace')
                 
-                # Tamaño dinámico según filas para que se centre
                 alto_tabla = 0.04 + (0.02 * len(chunk))
                 ax_tab_f = fig.add_axes([0.08, 0.77 - alto_tabla, 0.84, alto_tabla])
                 ax_tab_f.axis('off')
@@ -502,7 +519,6 @@ def generar_memoria_calculo_pdf(df_tramos, matrices, p_proy, p_elem, p_sondeo, p
                     if r_i % 2 == 0:
                         for c_i in range(9): t_f[r_i, c_i].set_facecolor('#f4f4f4')
                 
-                # Solo imprimir resumen de compresión en el último chunk de la fricción
                 if i_chunk == len(chunks_f) - 1:
                     resumen_axial = (
                         f"   Fricción Nominal Total (Ruf) = {r['Cf_nom_ton']:.1f} t  |  Fricción Reducida a Compresión (Cf) = {r['Cf_comp_ton']:.1f} t\n\n"
