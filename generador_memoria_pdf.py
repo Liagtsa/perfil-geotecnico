@@ -14,7 +14,7 @@ import matplotlib.image as mpimg
 # ==========================================================
 # 1. ENCABEZADO Y MEMBRETE EJECUTIVO
 # ==========================================================
-def crear_encabezado_memoria(fig, titulo_pagina, num_pagina, total_paginas, p_proy, p_elem, p_fecha):
+def crear_encabezado_memoria(fig, titulo_pagina, num_pagina, total_paginas, p_proy, p_elem, p_sondeo, p_fecha):
     ax_logo = fig.add_axes([0.05, 0.88, 0.22, 0.08])
     ax_logo.axis('off')
     
@@ -29,7 +29,8 @@ def crear_encabezado_memoria(fig, titulo_pagina, num_pagina, total_paginas, p_pr
     
     fig.text(0.30, 0.935, f"PROYECTO: {p_proy}", fontsize=10.5, weight='bold', color='navy')
     fig.text(0.30, 0.915, f"ELEMENTO: {p_elem}", fontsize=9)
-    fig.text(0.30, 0.895, f"MEMORIA TÉCNICA: {titulo_pagina}", fontsize=8.5, color='dimgray')
+    fig.text(0.30, 0.895, f"SONDEO: {p_sondeo}", fontsize=9)
+    fig.text(0.30, 0.875, f"MEMORIA TÉCNICA: {titulo_pagina}", fontsize=8.5, color='dimgray')
     
     if not p_fecha:
         p_fecha = datetime.datetime.now().strftime("%B %Y").upper()
@@ -295,7 +296,7 @@ def dibujar_esquemas(fig, D_val, L_val, naf_m):
 # ==========================================================
 # 4. FUNCIÓN PRINCIPAL GENERADORA DE LA MEMORIA
 # ==========================================================
-def generar_memoria_calculo_pdf(df_tramos, matrices, p_proy, p_elem, p_fecha):
+def generar_memoria_calculo_pdf(df_tramos, matrices, p_proy, p_elem, p_sondeo, p_fecha):
     pdf_buffer = io.BytesIO()
     
     matriz_comp = matrices['matriz_compresion']
@@ -361,7 +362,7 @@ def generar_memoria_calculo_pdf(df_tramos, matrices, p_proy, p_elem, p_fecha):
         # PÁGINA 1: METODOLOGÍA
         # --------------------------------------------------------
         fig = plt.figure(figsize=(8.5, 11))
-        crear_encabezado_memoria(fig, "METODOLOGÍA Y CRITERIOS NORMATIVOS", contador, total_paginas, p_proy, p_elem, p_fecha)
+        crear_encabezado_memoria(fig, "METODOLOGÍA Y CRITERIOS NORMATIVOS", contador, total_paginas, p_proy, p_elem, p_sondeo, p_fecha)
         texto_pg1 = (
             "1. METODOLOGÍA DE CÁLCULO GEOTÉCNICO (NTC CDMX 2023 / NTC PUEBLA)\n"
             "====================================================================================\n\n"
@@ -393,7 +394,7 @@ def generar_memoria_calculo_pdf(df_tramos, matrices, p_proy, p_elem, p_fecha):
         for i_blq, sub_df in enumerate(bloques_estratos):
             fig = plt.figure(figsize=(8.5, 11))
             z_ini_b, z_fin_b = sub_df['Prof_ini'].min(), sub_df['Prof_fin'].max()
-            crear_encabezado_memoria(fig, f"REGISTRO ESTRATIGRÁFICO ({z_ini_b:.1f} m a {z_fin_b:.1f} m)", contador, total_paginas, p_proy, p_elem, p_fecha)
+            crear_encabezado_memoria(fig, f"REGISTRO ESTRATIGRÁFICO ({z_ini_b:.1f} m a {z_fin_b:.1f} m)", contador, total_paginas, p_proy, p_elem, p_sondeo, p_fecha)
             
             sub_title = (
                 f"2. PERFIL ESTRATIGRÁFICO Y RESULTADOS SPT (Tramo {z_ini_b:.1f} m a {z_fin_b:.1f} m)\n"
@@ -433,7 +434,7 @@ def generar_memoria_calculo_pdf(df_tramos, matrices, p_proy, p_elem, p_fecha):
         # PÁGINA: ESQUEMAS VISUALES Y CRITERIOS
         # --------------------------------------------------------
         fig = plt.figure(figsize=(8.5, 11))
-        crear_encabezado_memoria(fig, "ESQUEMA PARAMÉTRICO Y ZONAS DE EXCLUSIÓN", contador, total_paginas, p_proy, p_elem, p_fecha)
+        crear_encabezado_memoria(fig, "ESQUEMA PARAMÉTRICO Y ZONAS DE EXCLUSIÓN", contador, total_paginas, p_proy, p_elem, p_sondeo, p_fecha)
         d_rep, l_rep = diametros[-1], longitudes[-1]
         dibujar_esquemas(fig, d_rep, l_rep, naf_m=naf_m)
         texto_esq = (
@@ -466,7 +467,7 @@ def generar_memoria_calculo_pdf(df_tramos, matrices, p_proy, p_elem, p_fecha):
             
             for i_chunk, chunk in enumerate(chunks_f):
                 fig = plt.figure(figsize=(8.5, 11))
-                crear_encabezado_memoria(fig, f"DESGLOSE CAPACIDAD AXIAL (Caso {idx_caso+1} de {len(desgloses)} - Pág {i_chunk+1})", contador, total_paginas, p_proy, p_elem, p_fecha)
+                crear_encabezado_memoria(fig, f"DESGLOSE CAPACIDAD AXIAL (Caso {idx_caso+1} de {len(desgloses)} - Pág {i_chunk+1})", contador, total_paginas, p_proy, p_elem, p_sondeo, p_fecha)
                 
                 info_pila = (
                     f" > PILA PROFUNDA: Diámetro D = {r['D']:.2f} m | Longitud L = {r['L']:.2f} m\n"
@@ -532,7 +533,7 @@ def generar_memoria_calculo_pdf(df_tramos, matrices, p_proy, p_elem, p_fecha):
                 z_fin_kh_bloque = min(z_cursor_kh + 24, n_metros_totales)
                 
                 fig = plt.figure(figsize=(8.5, 11))
-                crear_encabezado_memoria(fig, f"BALASTO Y RESORTES METRO A METRO ({z_cursor_kh} a {z_fin_kh_bloque} m)", contador, total_paginas, p_proy, p_elem, p_fecha)
+                crear_encabezado_memoria(fig, f"BALASTO Y RESORTES METRO A METRO ({z_cursor_kh} a {z_fin_kh_bloque} m)", contador, total_paginas, p_proy, p_elem, p_sondeo, p_fecha)
                 
                 info_balasto = (
                     f" > ANÁLISIS DE RESORTES LATERALES Y VERTICALES (D = {r['D']:.2f} m | L = {r['L']:.2f} m)\n"
@@ -586,7 +587,7 @@ def generar_memoria_calculo_pdf(df_tramos, matrices, p_proy, p_elem, p_fecha):
         # PÁGINA: GRÁFICAS DE COMPORTAMIENTO GEOTÉCNICO
         # --------------------------------------------------------
         fig = plt.figure(figsize=(8.5, 11))
-        crear_encabezado_memoria(fig, "GRÁFICAS DE COMPORTAMIENTO GEOTÉCNICO", contador, total_paginas, p_proy, p_elem, p_fecha)
+        crear_encabezado_memoria(fig, "GRÁFICAS DE COMPORTAMIENTO GEOTÉCNICO", contador, total_paginas, p_proy, p_elem, p_sondeo, p_fecha)
         
         ax_g1 = fig.add_axes([0.10, 0.48, 0.38, 0.32])
         for d in diametros:
@@ -624,7 +625,7 @@ def generar_memoria_calculo_pdf(df_tramos, matrices, p_proy, p_elem, p_fecha):
         # PÁGINA: TABLAS RESUMEN Y MATRICES DE DISEÑO
         # --------------------------------------------------------
         fig = plt.figure(figsize=(8.5, 11))
-        crear_encabezado_memoria(fig, "RESUMEN TABULAR Y MATRICES DE DISEÑO ESTRUCTURAL", contador, total_paginas, p_proy, p_elem, p_fecha)
+        crear_encabezado_memoria(fig, "RESUMEN TABULAR Y MATRICES DE DISEÑO ESTRUCTURAL", contador, total_paginas, p_proy, p_elem, p_sondeo, p_fecha)
         
         head_cols = ["Prof. (m)"] + [f"D = {d:.2f} m" for d in diametros]
         

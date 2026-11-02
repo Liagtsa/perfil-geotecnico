@@ -577,12 +577,13 @@ with tab_cimentacion:
                     df_proy_temp = pd.read_excel(archivo_calc, sheet_name='Proyecto').set_index('Parametro')['Valor'].to_dict()
                     nm_proy = str(df_proy_temp.get('Proyecto', 'ESTUDIO GEOTÉCNICO'))
                     nm_elem = str(df_proy_temp.get('Elemento', 'DISEÑO DE CIMENTACIONES'))
+                    nm_sondeo = str(df_proy_temp.get('Sondeo', 'SONDEO 1'))
                     nm_fecha = str(df_proy_temp.get('Fecha', ''))
                 except Exception:
-                    nm_proy, nm_elem, nm_fecha = "PROYECTO", "CIMENTACIONES", ""
+                    nm_proy, nm_elem, nm_sondeo, nm_fecha = "PROYECTO", "CIMENTACIONES", "SONDEO 1", ""
 
                 with st.spinner("Compilando memoria analítica en PDF..."):
-                    pdf_memoria_bytes = generar_memoria_calculo_pdf(df_tramos, matrices, nm_proy, nm_elem, nm_fecha)
+                    pdf_memoria_bytes = generar_memoria_calculo_pdf(df_tramos, matrices, nm_proy, nm_elem, nm_sondeo, nm_fecha)
 
                 st.download_button(
                     label="📄 Descargar Memoria de Cálculo PDF",
