@@ -16,6 +16,9 @@ from cimentaciones_profundas import (
     generar_matrices_parametricas,
     obtener_tabla_balasto_metro_a_metro
 )
+import importlib
+import generador_memoria_pdf
+importlib.reload(generador_memoria_pdf)
 from generador_memoria_pdf import generar_memoria_calculo_pdf
 
 # ==========================================
