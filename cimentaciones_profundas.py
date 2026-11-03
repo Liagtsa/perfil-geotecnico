@@ -14,12 +14,9 @@ def convertir_spt_campo(valor_raw):
         return min(float(valor_raw), 50.0) if valor_raw > 0 else np.nan
 
     val_str = str(valor_raw).strip().upper()
-    
-    # En caso de rechazo documentado o avance rotario en material impenetrable
     if 'ABT' in val_str or 'RECHAZO' in val_str or 'NQ' in val_str:
         return 50.0
         
-    # Interpretación de rechazos con avance parcial (ejemplo: 50/15, 50/10)
     match = re.search(r'(\d+)\s*/\s*(\d+)', val_str)
     if match:
         return 50.0
@@ -37,23 +34,16 @@ def estimar_peso_volumetrico(tipo, sucs, n60, w_pct=None, f_pct=None, bajo_naf=F
     de fases (w%, F%, Gs) con la compacidad/consistencia empírica de N60.
     """
     gamma_w = 9.81
-    
-    # 1. Caso Roca o formaciones basálticas/tobáceas
     if tipo == 'Roca' or 'ROCA' in str(sucs).upper():
         gamma_roca = 21.0 + (min(n60, 50.0) / 50.0) * 3.5
         return round(gamma_roca, 2)
         
-    # 2. Gravedad específica Gs estimada por contenido de finos y SUCS
     f = float(f_pct) if (f_pct is not None and not pd.isna(f_pct)) else (10.0 if tipo == 'Friccionante' else 60.0)
     
-    if f < 12.0:
-        gs = 2.65
-    elif f <= 50.0:
-        gs = 2.68
-    else:
-        gs = 2.72 if 'CH' in str(sucs).upper() else 2.70
+    if f < 12.0: gs = 2.65
+    elif f <= 50.0: gs = 2.68
+    else: gs = 2.72 if 'CH' in str(sucs).upper() else 2.70
         
-    # 3. Cálculo de fases por contenido de agua w%
     gamma_fase = None
     if w_pct is not None and not pd.isna(w_pct) and float(w_pct) > 0:
         w = float(w_pct) / 100.0
@@ -61,14 +51,12 @@ def estimar_peso_volumetrico(tipo, sucs, n60, w_pct=None, f_pct=None, bajo_naf=F
         e = (w * gs) / sr
         gamma_fase = gamma_w * (gs * (1.0 + w)) / (1.0 + e)
         
-    # 4. Estimación empírica por SPT (N60)
     if tipo == 'Friccionante':
         delta_f = 0.5 if f > 20.0 else 0.0
         gamma_spt = 14.5 + 0.12 * min(n60, 50.0) - delta_f
     else:
         gamma_spt = 14.0 + 0.15 * min(n60, 40.0)
         
-    # 5. Ponderación final
     if gamma_fase is not None:
         gamma_final = 0.70 * gamma_fase + 0.30 * gamma_spt
     else:
@@ -89,10 +77,8 @@ def procesar_sondeo_completo(xls_path_o_bytes):
     df_hum = pd.read_excel(xls, 'Humedades')
     df_ind = pd.read_excel(xls, 'PruebasIndice')
     
-    try:
-        naf = float(df_proy.get('NAF', np.nan))
-    except (ValueError, TypeError):
-        naf = None
+    try: naf = float(df_proy.get('NAF', np.nan))
+    except (ValueError, TypeError): naf = None
         
     eficiencia = float(df_proy.get('Eficiencia_SPT', 60.0))
     diam_barr = float(df_proy.get('Diametro_Barrena_mm', 100.0))
@@ -130,12 +116,9 @@ def procesar_sondeo_completo(xls_path_o_bytes):
             if 'Tipo_Mecanico' in fila_ind and pd.notna(fila_ind['Tipo_Mecanico']):
                 tipo = str(fila_ind['Tipo_Mecanico']).capitalize()
             else:
-                if 'ROCA' in sucs or sucs.startswith('R'):
-                    tipo = 'Roca'
-                elif sucs.startswith(('C', 'M', 'O', 'CL', 'CH', 'ML', 'MH')):
-                    tipo = 'Cohesivo'
-                else:
-                    tipo = 'Friccionante'
+                if 'ROCA' in sucs or sucs.startswith('R'): tipo = 'Roca'
+                elif sucs.startswith(('C', 'M', 'O', 'CL', 'CH', 'ML', 'MH')): tipo = 'Cohesivo'
+                else: tipo = 'Friccionante'
                     
         rqd_cm = row.get('RQD_cm', np.nan)
         rec_cm = row.get('Recuperacion_cm', np.nan)
@@ -196,8 +179,7 @@ def procesar_sondeo_completo(xls_path_o_bytes):
             'qu_kPa': round(qu_kpa, 1) if pd.notna(qu_kpa) else np.nan
         })
         
-    df_tramos = pd.DataFrame(tramos)
-    return df_tramos, naf, config_geometria
+    return pd.DataFrame(tramos), naf, config_geometria
 
 
 def evaluar_pila(df_tramos, naf_m, diametro_m, longitud_m, tipo_elemento="Pila",
@@ -205,7 +187,8 @@ def evaluar_pila(df_tramos, naf_m, diametro_m, longitud_m, tipo_elemento="Pila",
                  factor_cu_spt=6.0, gamma_concreto=24.0, fc_kg_cm2=300.0):
     """
     Evalúa la capacidad de carga vertical a compresión y tensión, así como
-    la rigidez axial Kv en cabeza y balasto promedio kh para una pila.
+    la rigidez axial Kv en cabeza y balasto promedio kh para una pila con
+    calibración geotécnica realista según NTC-CDMX 2023 / FHWA.
     """
     pp = np.pi * diametro_m
     z_act_ini = 1.50
@@ -236,11 +219,9 @@ def evaluar_pila(df_tramos, naf_m, diametro_m, longitud_m, tipo_elemento="Pila",
     peso_estratos = 0.0
 
     for _, tramo in df_tramos.iterrows():
-        if tramo['Prof_ini'] >= longitud_m:
-            break
+        if tramo['Prof_ini'] >= longitud_m: break
         long_real = min(tramo['Prof_fin'], longitud_m) - tramo['Prof_ini']
-        if long_real <= 0:
-            continue
+        if long_real <= 0: continue
             
         pv_total += tramo['Gamma'] * long_real
         
@@ -253,13 +234,15 @@ def evaluar_pila(df_tramos, naf_m, diametro_m, longitud_m, tipo_elemento="Pila",
         
         if tipo == 'Roca':
             icr = tramo['ICR'] if pd.notna(tramo.get('ICR')) else 20.0
-            qu = tramo['qu_kPa'] if pd.notna(tramo.get('qu_kPa')) else 25000.0
+            qu_medido = pd.notna(tramo.get('qu_kPa')) and tramo['qu_kPa'] > 0
+            qu = tramo['qu_kPa'] if qu_medido else 3000.0  # Roca intemperizada/rechazo SPT sin ensaye triaxial
             alpha_e = 10.0 ** (0.013 * icr - 1.34)
-            fui = min(1.4 * pa * np.sqrt(alpha_e * qu / pa), 3000.0)
+            fui_calc = 1.4 * pa * np.sqrt(alpha_e * qu / pa)
+            fui = min(fui_calc, 250.0 if not qu_medido else 3000.0)  # Cota realista en roca/rechazo
             fr_f = 0.65
             tramo_comp = fr_f * (pp * fui * long_fuste_efectiva)
             tramo_tens = fr_f * (pp * (fui * f_red_roca) * long_fuste_efectiva)
-            Em_kPa = max(alpha_e * 300.0 * qu, 200000.0)
+            Em_kPa = max(alpha_e * 300.0 * qu, 150000.0)
             kh_local = (Em_kPa / (diametro_m * (1.0 - 0.25**2))) / 9.81
         elif tipo == 'Friccionante':
             fui = min(3.0 * n60, 150.0)
@@ -268,9 +251,11 @@ def evaluar_pila(df_tramos, naf_m, diametro_m, longitud_m, tipo_elemento="Pila",
             tramo_tens = fr_f * (pp * (fui * f_red_fricc) * long_fuste_efectiva)
             nh_ton_m3 = 25.0 * n60
             kh_local = nh_ton_m3 * (tramo['P_med'] / diametro_m)
-        else:
+        else: # Cohesivo / Limo
             cu = tramo['Cu_lab'] if (pd.notna(tramo.get('Cu_lab')) and tramo['Cu_lab'] > 0) else (factor_cu_spt * n60)
-            fui = cu
+            # Factor alfa de adherencia Tomlinson / FHWA / NTC-CDMX 3.6.2.3.1
+            alpha = max(0.35, min(1.0, 0.55 * np.sqrt(100.0 / max(cu, 25.0))))
+            fui = min(alpha * cu, 120.0)  # Cota normativa en fuste de arcillas/limos firmes
             fr_f = 0.70
             tramo_comp = fr_f * (pp * fui * long_fuste_efectiva)
             tramo_tens = fr_f * (pp * (fui * f_red_cohes) * long_fuste_efectiva)
@@ -290,14 +275,15 @@ def evaluar_pila(df_tramos, naf_m, diametro_m, longitud_m, tipo_elemento="Pila",
     
     if tipo_p == 'Roca':
         icr_p = estrato_p['ICR'] if pd.notna(estrato_p.get('ICR')) else 20.0
-        qu_p = estrato_p['qu_kPa'] if pd.notna(estrato_p.get('qu_kPa')) else 30000.0
+        qu_medido = pd.notna(estrato_p.get('qu_kPa')) and estrato_p['qu_kPa'] > 0
+        qu_p = estrato_p['qu_kPa'] if qu_medido else 5000.0
         sd = max(0.05, 0.05 + 0.95 * (icr_p / 100.0)**2)
         td = 0.002
         ksp = (3.0 + sd / d_punta) / ((10.0 / 3.0) * np.sqrt(1.0 + 300.0 * (td / sd)))
         d_fact = min(1.0 + 0.4 * (longitud_m / d_punta), 3.0)
         pu = qu_p * ksp * d_fact
         cp_comp_kn = 0.35 * (pu * ap)
-        Em_base = max((10.0 ** (0.013 * icr_p - 1.34)) * 300.0 * qu_p, 500000.0)
+        Em_base = max((10.0 ** (0.013 * icr_p - 1.34)) * 300.0 * qu_p, 300000.0)
         kv_base_ton_m3 = (Em_base / (d_punta * (1.0 - 0.25**2))) / 9.81
     elif tipo_p == 'Friccionante':
         zona_inf = longitud_m + 2.0 * d_punta
@@ -310,7 +296,8 @@ def evaluar_pila(df_tramos, naf_m, diametro_m, longitud_m, tipo_elemento="Pila",
     else:
         cu_p = estrato_p['Cu_lab'] if (pd.notna(estrato_p.get('Cu_lab')) and estrato_p['Cu_lab'] > 0) else (factor_cu_spt * estrato_p['N60'])
         fre = (d_punta + 1.0) / (2.0 * d_punta + 1.0) if d_punta > 0.5 else 1.0
-        cp_comp_kn = ((cu_p * 9.0 * 0.35) + pv_total) * ap * fre
+        pu_kpa = min((cu_p * 9.0 * 0.35) + pv_total, 3500.0)
+        cp_comp_kn = pu_kpa * ap * fre
         Es_base = 600.0 * cu_p
         kv_base_ton_m3 = (Es_base / (d_punta * (1.0 - 0.40**2))) / 9.81
 
@@ -393,14 +380,12 @@ def obtener_tabla_balasto_metro_a_metro(df_tramos, naf_m, diametro_m, longitud_m
     
     for z in range(1, n_metros + 1):
         z_flt = min(float(z), longitud_m)
-        
         e_match = None
         for _, tramo in df_tramos.iterrows():
             if tramo['Prof_ini'] < z_flt <= tramo['Prof_fin'] or (tramo['Prof_ini'] == 0 and z_flt == 0):
                 e_match = tramo
                 break
-        if e_match is None:
-            e_match = df_tramos.iloc[-1]
+        if e_match is None: e_match = df_tramos.iloc[-1]
             
         tipo = e_match['Tipo']
         sucs = e_match['SUCS']
@@ -408,9 +393,10 @@ def obtener_tabla_balasto_metro_a_metro(df_tramos, naf_m, diametro_m, longitud_m
         
         if tipo == 'Roca':
             icr = e_match['ICR'] if pd.notna(e_match.get('ICR')) else 20.0
-            qu = e_match['qu_kPa'] if pd.notna(e_match.get('qu_kPa')) else 25000.0
+            qu_medido = pd.notna(e_match.get('qu_kPa')) and e_match['qu_kPa'] > 0
+            qu = e_match['qu_kPa'] if qu_medido else 3000.0
             alpha_e = 10.0 ** (0.013 * icr - 1.34)
-            Em_kPa = max(alpha_e * 300.0 * qu, 200000.0)
+            Em_kPa = max(alpha_e * 300.0 * qu, 150000.0)
             kh_local = (Em_kPa / (diametro_m * (1.0 - 0.25**2))) / 9.81
             kv_local = kh_local * 1.0
         elif tipo == 'Friccionante':

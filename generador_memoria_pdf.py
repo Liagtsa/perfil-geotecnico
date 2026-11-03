@@ -72,11 +72,9 @@ def desglosar_calculo_pila(df_tramos, naf_m, diametro_m, longitud_m,
     peso_estratos = 0.0
     
     for _, tramo in df_tramos.iterrows():
-        if tramo['Prof_ini'] >= longitud_m:
-            break
+        if tramo['Prof_ini'] >= longitud_m: break
         long_real = min(tramo['Prof_fin'], longitud_m) - tramo['Prof_ini']
-        if long_real <= 0:
-            continue
+        if long_real <= 0: continue
             
         pv_total += tramo['Gamma'] * long_real
         
@@ -89,13 +87,15 @@ def desglosar_calculo_pila(df_tramos, naf_m, diametro_m, longitud_m,
         
         if tipo == 'Roca':
             icr = tramo['ICR'] if pd.notna(tramo.get('ICR')) else 20.0
-            qu = tramo['qu_kPa'] if pd.notna(tramo.get('qu_kPa')) else 25000.0
+            qu_medido = pd.notna(tramo.get('qu_kPa')) and tramo['qu_kPa'] > 0
+            qu = tramo['qu_kPa'] if qu_medido else 3000.0
             alpha_e = 10.0 ** (0.013 * icr - 1.34)
-            fui = min(1.4 * pa * np.sqrt(alpha_e * qu / pa), 3000.0)
+            fui_calc = 1.4 * pa * np.sqrt(alpha_e * qu / pa)
+            fui = min(fui_calc, 250.0 if not qu_medido else 3000.0)
             fr_f = 0.65
             tramo_comp = fr_f * (pp * fui * l_efec)
             tramo_tens = fr_f * (pp * (fui * f_red_roca) * l_efec)
-            Em_kPa = max(alpha_e * 300.0 * qu, 200000.0)
+            Em_kPa = max(alpha_e * 300.0 * qu, 150000.0)
             kh_local = (Em_kPa / (diametro_m * (1.0 - 0.25**2))) / 9.81
             norma = "NTC CDMX Roca"
         elif tipo == 'Friccionante':
@@ -106,9 +106,10 @@ def desglosar_calculo_pila(df_tramos, naf_m, diametro_m, longitud_m,
             nh_ton_m3 = 25.0 * n60
             kh_local = nh_ton_m3 * (tramo['P_med'] / diametro_m)
             norma = "NTC CDMX Arenas"
-        else:
+        else: # Cohesivo / Limo
             cu = tramo['Cu_lab'] if (pd.notna(tramo.get('Cu_lab')) and tramo['Cu_lab'] > 0) else (factor_cu_spt * n60)
-            fui = cu
+            alpha = max(0.35, min(1.0, 0.55 * np.sqrt(100.0 / max(cu, 25.0))))
+            fui = min(alpha * cu, 120.0)
             fr_f = 0.70
             tramo_comp = fr_f * (pp * fui * l_efec)
             tramo_tens = fr_f * (pp * (fui * f_red_cohes) * l_efec)
@@ -145,7 +146,8 @@ def desglosar_calculo_pila(df_tramos, naf_m, diametro_m, longitud_m,
     
     if tipo_p == 'Roca':
         icr_p = estrato_p['ICR'] if pd.notna(estrato_p.get('ICR')) else 20.0
-        qu_p = estrato_p['qu_kPa'] if pd.notna(estrato_p.get('qu_kPa')) else 30000.0
+        qu_medido = pd.notna(estrato_p.get('qu_kPa')) and estrato_p['qu_kPa'] > 0
+        qu_p = estrato_p['qu_kPa'] if qu_medido else 5000.0
         sd = max(0.05, 0.05 + 0.95 * (icr_p / 100.0)**2)
         td = 0.002
         ksp = (3.0 + sd / d_punta) / ((10.0 / 3.0) * np.sqrt(1.0 + 300.0 * (td / sd)))
@@ -153,9 +155,9 @@ def desglosar_calculo_pila(df_tramos, naf_m, diametro_m, longitud_m,
         pu_kpa = qu_p * ksp * d_fact
         fr_p = 0.35
         cp_comp_kn = fr_p * (pu_kpa * ap)
-        Em_base = max((10.0 ** (0.013 * icr_p - 1.34)) * 300.0 * qu_p, 500000.0)
+        Em_base = max((10.0 ** (0.013 * icr_p - 1.34)) * 300.0 * qu_p, 300000.0)
         kv_base_ton_m3 = (Em_base / (d_punta * (1.0 - 0.25**2))) / 9.81
-        detalles_punta = f"Roca (qu={qu_p/1000:.1f} MPa, ICR={icr_p:.1f}%, Ksp={ksp:.3f}, d={d_fact:.2f})"
+        detalles_punta = f"Roca (qu={qu_p/1000:.1f} MPa, ICR={icr_p:.1f}%, Ksp={ksp:.3f})"
         norma_punta = "NTC CDMX Roca"
     elif tipo_p == 'Friccionante':
         zona_inf = longitud_m + 2.0 * d_punta
@@ -169,14 +171,14 @@ def desglosar_calculo_pila(df_tramos, naf_m, diametro_m, longitud_m,
         detalles_punta = f"Arena (N60_punta={n60_punta:.1f} en 2D)"
         norma_punta = "NTC CDMX Arenas"
     else:
-        cu_p = estrato_p['Cu_lab'] if (pd.notna(estrato_p.get('Cu_lab')) and estrato_p['Cu_lab'] > 0) else (factor_cu_spt * n60)
+        cu_p = estrato_p['Cu_lab'] if (pd.notna(estrato_p.get('Cu_lab')) and estrato_p['Cu_lab'] > 0) else (factor_cu_spt * estrato_p['N60'])
         fre = (d_punta + 1.0) / (2.0 * d_punta + 1.0) if d_punta > 0.5 else 1.0
         fr_p = 0.35
-        pu_kpa = (cu_p * 9.0 * fr_p + pv_total) * fre / fr_p
-        cp_comp_kn = ((cu_p * 9.0 * fr_p) + pv_total) * ap * fre
+        pu_kpa = min((cu_p * 9.0 * fr_p + pv_total) * fre / fr_p, 3500.0)
+        cp_comp_kn = pu_kpa * fr_p * ap
         Es_base = 600.0 * cu_p
         kv_base_ton_m3 = (Es_base / (d_punta * (1.0 - 0.40**2))) / 9.81
-        detalles_punta = f"Arcilla (cu={cu_p:.1f} kPa, Nc*=9.0, Fre={fre:.3f})"
+        detalles_punta = f"Arcilla (cu={cu_p:.1f} kPa, Nc*=9.0)"
         norma_punta = "NTC Puebla Arcillas"
         
     vol_fuste = (np.pi * (diametro_m**2) / 4.0) * (longitud_m - (h_campana_m if con_campana else 0.0))
@@ -324,7 +326,7 @@ def generar_memoria_calculo_pdf(df_tramos, matrices, p_proy, p_elem, *args, **kw
     diametros = matriz_comp.columns.tolist()
     longitudes = matriz_comp.index.tolist()
     
-    # Paginación proporcional y eficiente del registro estratigráfico:
+    # Paginación inteligente del registro estratigráfico:
     # Hasta 42 filas caben holgadamente por página sin tocar el encabezado.
     n_total_estratos = len(df_tramos)
     num_pags_estratos = max(1, int(math.ceil(n_total_estratos / 42.0)))
@@ -333,8 +335,7 @@ def generar_memoria_calculo_pdf(df_tramos, matrices, p_proy, p_elem, *args, **kw
     bloques_estratos = []
     for i in range(num_pags_estratos):
         sub = df_tramos.iloc[i * filas_por_pag : (i + 1) * filas_por_pag]
-        if not sub.empty:
-            bloques_estratos.append(sub)
+        if not sub.empty: bloques_estratos.append(sub)
     num_pags_estratos = len(bloques_estratos)
     
     # Sincronización de configuración
@@ -358,7 +359,7 @@ def generar_memoria_calculo_pdf(df_tramos, matrices, p_proy, p_elem, *args, **kw
         for d, l in casos_analisis
     ]
     
-    # Estructura ejecutiva: exactamente 2 páginas por caso (1 memoria axial + 1 balasto)
+    # Estructura ejecutiva de 22 páginas exactas (1 metodología + estratigrafía + 1 esquema + 16 desglose + 1 gráficas + 1 resumen)
     total_paginas = 1 + num_pags_estratos + 1 + (len(desgloses) * 2) + 2
     
     with PdfPages(pdf_buffer) as pdf:
@@ -380,9 +381,9 @@ def generar_memoria_calculo_pdf(df_tramos, matrices, p_proy, p_elem, *args, **kw
             "B. CAPACIDAD EN CIMENTACIONES PROFUNDAS (Pilas Perforadas)\n"
             "   - Suelos Friccionantes (NTC CDMX 3.6.2.3.2.3): fui = min(3*N60, 150 kPa); FR_fuste = 0.50.\n"
             "     Punta: pu = 60 * N60_punta (<= 50 en 2D); FR_punta = 0.35.\n"
-            "   - Suelos Cohesivos (NTC Puebla 3.5.1 / 3.6.1): f = cu; FR_fuste = 0.70.\n"
+            "   - Suelos Cohesivos (NTC CDMX 3.6.2.3.1 / Puebla): fui = min(alpha * cu, 120 kPa); FR_fuste = 0.70.\n"
             "     Punta: Cp = (cu * Nc* * FR + pv) * Ap * Fre; Nc* = 9.0; FR = 0.35; Fre = (B+1)/(2B+1).\n"
-            "   - Formaciones Rocosas (NTC CDMX 3.6.2.3.5): fui = 1.4*Pa*sqrt(alpha_E*qu/Pa); FR_f = 0.65.\n"
+            "   - Formaciones Rocosas (NTC CDMX 3.6.2.3.5): fui = min(1.4*Pa*sqrt(alpha_E*qu/Pa), 250 kPa); FR_f = 0.65.\n"
             "     Punta: pu = qu * Ksp * d; FR_p = 0.35; alpha_E = 10^(0.013*ICR - 1.34).\n\n"
             "C. RESTRICCIONES GEOTÉCNICAS OBLIGATORIAS (FHWA-NHI-10-016 / NTC 2023)\n"
             "   - Se desprecian los primeros 1,500 mm (1.50 m) de fuste por remoldeo y relajación superficial.\n"
