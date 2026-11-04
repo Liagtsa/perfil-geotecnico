@@ -181,7 +181,7 @@ def generar_memoria_calculo_pdf(df_tramos, matrices, p_proy, p_elem, *args, **kw
             "B. CAPACIDAD EN CIMENTACIONES PROFUNDAS (Pilas Perforadas)\n"
             "   - Suelos Friccionantes (NTC CDMX 3.6.2.3.2.3): fui = min(3.0 * N60, 200 kPa); FR_fuste = 0.50.\n"
             "     Punta: pu = 57.5 * N60_punta (<= 75 golpes); FR_punta = 0.35.\n"
-            "   - Suelos Cohesivos (Método Alfa NTC 3.6.2.3.2.1): fui = min(alpha * cu, 200 kPa); FR_fuste = 0.70.\n"
+            "   - Suelos Cohesivos (Método Alfa NTC 3.6.2.3.2.1 / FAS): fui = min(alpha * cu, 200 kPa); FR_fuste = 0.55.\n"
             "     Punta: Cp = (cu * Nc* * FR + pv) * Ap * Fre; Nc* = 9.0; FR = 0.35; Fre = (B+1)/(2B+1).\n"
             "   - Formaciones Rocosas (NTC CDMX 3.6.2.3.5): fui = min(1.4*Pa*sqrt(alpha_E*qu/Pa), 3000 kPa); FR_f = 0.65.\n"
             "     Punta: pu = qu * Ksp * d; FR_p = 0.35; alpha_E = 10^(0.013*ICR - 1.34).\n\n"
