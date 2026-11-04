@@ -10,20 +10,26 @@ import os
 import textwrap
 from PIL import Image
 
-# Importación de los módulos especializados de cimentaciones profundas y memoria
+# ==========================================================
+# RECARGA EN CALIENTE DE MÓDULOS (EVITA CACHÉ OBSOLETO EN RAM)
+# ==========================================================
+import importlib
+import cimentaciones_profundas
+import generador_memoria_pdf
+
+importlib.reload(cimentaciones_profundas)
+importlib.reload(generador_memoria_pdf)
+
 from cimentaciones_profundas import (
     procesar_sondeo_completo,
     generar_matrices_parametricas,
     obtener_tabla_balasto_metro_a_metro
 )
-import importlib
-import generador_memoria_pdf
-importlib.reload(generador_memoria_pdf)
 from generador_memoria_pdf import generar_memoria_calculo_pdf
 
-# ==========================================
+# ==========================================================
 # 0. CONFIGURACIÓN DE PÁGINA E ICONO
-# ==========================================
+# ==========================================================
 ruta_logo = "logo_empresa.png"
 if os.path.exists(ruta_logo):
     try:
@@ -39,9 +45,9 @@ st.set_page_config(
     layout="wide"
 )
 
-# ==========================================
+# ==========================================================
 # 1. SISTEMA DE LOGIN (Autenticación Segura)
-# ==========================================
+# ==========================================================
 if 'autenticado' not in st.session_state:
     st.session_state['autenticado'] = False
 
@@ -72,9 +78,9 @@ if not st.session_state['autenticado']:
                 st.error("Usuario o contraseña incorrectos.")
     st.stop()
 
-# ==========================================
+# ==========================================================
 # 2. MOTOR GEOTÉCNICO Y PERFIL ISO 710-2
-# ==========================================
+# ==========================================================
 PROF_POR_PAGINA = 25.0
 
 def generar_plantilla_excel():

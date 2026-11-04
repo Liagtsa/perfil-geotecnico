@@ -1,12 +1,15 @@
 # ==============================================================================
 # MODULO: cimentaciones_profundas.py
-# VERSION: 2.4.0-NTC2023-FR055-CALIBRADO
-# REVISION NORMATIVA: NTC-CDMX 2023 / NTC PUEBLA
-# MODIFICACIONES APLICADAS:
-#   1. Suelos Cohesivos: Metodo Alfa con FR = 0.55 (Tabla 3.6.1 NTC-CDMX FAS / Campo)
-#   2. Suelos Friccionantes: Friccion unitaria fui = min(3.0 * N60, 200.0 kPa) con FR = 0.50
-#   3. Formaciones Rocosas: Mecanica de rocas (ICR/RQD) con FR = 0.65 y qu conservador
-#   4. Extraccion: Criterio NTC 3.6.3.2 (castigo 0.80/0.60 y subpresion de NAF en concreto)
+# VERSION ACTUALIZADA: 2.5.0-NTC2023-FR055-TOPE200KPA
+# FECHA DE CALIBRACION: NOVIEMBRE 2026
+# REVISION NORMATIVA: NTC-CDMX 2023 / NTC PUEBLA / FHWA-NHI-10-016
+# ------------------------------------------------------------------------------
+# PARAMETROS GEOTECNICOS NORMATIVOS INTEGRADOS:
+#   1. Suelos Cohesivos (FAS / Campo): fui = min(alpha * cu, 200.0 kPa) | FR = 0.55
+#   2. Suelos Friccionantes (Arenas):  fui = min(3.0 * N60, 200.0 kPa)   | FR = 0.50
+#   3. Macizos Rocosos (ICR/qu):       fui = min(fui_calc, 3000.0 kPa)   | FR = 0.65
+#   4. Resistencia de Punta (Base):    pu = 57.5 * N60 (Arena)           | FR = 0.35
+#   5. Tension / Arrancamiento:        f_red = 0.80/0.60 + Peso Neto con Subpresion
 # ==============================================================================
 
 import numpy as np
@@ -14,8 +17,15 @@ import pandas as pd
 import re
 import math
 
-# Constante de control normativo para suelos cohesivos
-FR_COHESIVO_VIGENTE = 0.55
+# Constantes de diseno normativo NTC-CDMX 2023
+FR_COHESIVO_FAS = 0.55       # Tabla 3.6.1 NTC-CDMX 2023 (Suelos Cohesivos FAS / Campo)
+FR_FRICCIONANTE_SPT = 0.50   # Ec. 3.6.2.3.2.4.4 NTC-CDMX 2023 (Friccion con SPT)
+FR_ROCA_FUSTE = 0.65         # Numeral 3.6.2.3.5 NTC-CDMX 2023 (Macizos Rocosos)
+FR_PUNTA_BASE = 0.35         # Tabla 3.6.1 NTC-CDMX 2023 (Capacidad de Punta)
+TOPE_FUI_KPA = 200.0         # Limite maximo normativo en fuste para suelos (Ec. 3.6.2.3.2.4.3)
+
+print(">>> [SISTEMA] Modulo cimentaciones_profundas v2.5.0 cargado exitosamente.")
+print(f">>> [SISTEMA] Calibracion activa: FR_cohesivo = {FR_COHESIVO_FAS}, Tope fui = {TOPE_FUI_KPA} kPa.")
 
 
 def convertir_spt_campo(valor_raw):
@@ -160,6 +170,7 @@ def procesar_sondeo_completo(xls_path_o_bytes):
             n_campo = 50.0 if tipo == 'Roca' else 10.0
             
         n_corr = n_campo
+        # Correccion por dilatancia bajo NAF en arenas finas sumergidas
         if (tipo == 'Friccionante') and (naf is not None and p_med > naf) and n_corr > 15:
             n_corr = 15.0 + 0.5 * (n_corr - 15.0)
             
@@ -203,8 +214,8 @@ def evaluar_pila(df_tramos, naf_m, diametro_m, longitud_m, tipo_elemento="Pila",
     """
     Evalua la capacidad de carga vertical a compresion y tension segun NTC-CDMX 2023:
     - Roca: Mecanica de rocas (3.6.2.3.5) con ICR/RQD y qu conservador si no hay ensaye destructivo.
-    - Suelos Friccionantes: Friccion empirica SPT (3.6.2.3.2.3), fui = min(3.0*N60, 200 kPa), FR = 0.50.
-    - Suelos Cohesivos: Metodo Alfa con FR = 0.55 (Tabla 3.6.1 NTC-CDMX 2023 / FAS), fui <= 200 kPa.
+    - Suelos Friccionantes: Friccion empirica SPT (3.6.2.3.2.3), fui = min(3.0*N60, 200.0 kPa), FR = 0.50.
+    - Suelos Cohesivos: Metodo Alfa con FR = 0.55 (Tabla 3.6.1 NTC-CDMX 2023 FAS / Campo), fui <= 200.0 kPa.
       Punta en cohesivos con Nc* = 9.0 y factor Fre = (B+1)/(2B+1).
     - NAF: Considera afectacion por subpresion en pv_total y peso propio neto del concreto.
     """
@@ -242,6 +253,7 @@ def evaluar_pila(df_tramos, naf_m, diametro_m, longitud_m, tipo_elemento="Pila",
         long_real = min(tramo['Prof_fin'], longitud_m) - tramo['Prof_ini']
         if long_real <= 0: continue
             
+        # Consideracion de NAF en esfuerzos verticales efectivos
         p_med = tramo['P_med']
         bajo_naf = (naf_m is not None and p_med > naf_m)
         gamma_eff = (tramo['Gamma'] - gamma_w) if bajo_naf else tramo['Gamma']
@@ -260,15 +272,16 @@ def evaluar_pila(df_tramos, naf_m, diametro_m, longitud_m, tipo_elemento="Pila",
             qu = tramo['qu_kPa'] if qu_medido else qu_roca_conservador
             alpha_e = 10.0 ** (0.013 * icr - 1.34)
             fui = min(1.4 * pa * np.sqrt(alpha_e * qu / pa), 3000.0)
-            fr_f = 0.65
+            fr_f = FR_ROCA_FUSTE # 0.65
             tramo_comp = fr_f * (pp * fui * long_fuste_efectiva)
             tramo_tens = fr_f * (pp * (fui * f_red_roca) * long_fuste_efectiva)
             Em_kPa = max(alpha_e * 300.0 * qu, 150000.0)
             kh_local = (Em_kPa / (diametro_m * (1.0 - 0.25**2))) / 9.81
             norma = "NTC CDMX 3.6.2.3.5 (Roca)"
         elif tipo == 'Friccionante':
-            fui = min(3.0 * n60, 200.0)
-            fr_f = 0.50
+            # NTC CDMX 3.6.2.3.2.3: fui = min(3.0 * N60, 200.0 kPa)
+            fui = min(3.0 * n60, TOPE_FUI_KPA) # 200.0 kPa
+            fr_f = FR_FRICCIONANTE_SPT # 0.50
             tramo_comp = fr_f * (pp * fui * long_fuste_efectiva)
             tramo_tens = fr_f * (pp * (fui * f_red_fricc) * long_fuste_efectiva)
             nh_ton_m3 = 25.0 * n60
@@ -277,8 +290,8 @@ def evaluar_pila(df_tramos, naf_m, diametro_m, longitud_m, tipo_elemento="Pila",
         else: # Cohesivo / Limo con Metodo Alfa y FR = 0.55
             cu = tramo['Cu_lab'] if (pd.notna(tramo.get('Cu_lab')) and tramo['Cu_lab'] > 0) else (factor_cu_spt * n60)
             alpha = max(0.35, min(1.0, 0.55 * np.sqrt(100.0 / max(cu, 25.0))))
-            fui = min(alpha * cu, 200.0)
-            fr_f = FR_COHESIVO_VIGENTE  # FR = 0.55 segun Tabla 3.6.1 NTC-CDMX 2023
+            fui = min(alpha * cu, TOPE_FUI_KPA) # 200.0 kPa
+            fr_f = FR_COHESIVO_FAS # 0.55 (Tabla 3.6.1 NTC-CDMX 2023)
             tramo_comp = fr_f * (pp * fui * long_fuste_efectiva)
             tramo_tens = fr_f * (pp * (fui * f_red_cohes) * long_fuste_efectiva)
             kh_local = (67.0 * cu / diametro_m) / 9.81
@@ -315,7 +328,7 @@ def evaluar_pila(df_tramos, naf_m, diametro_m, longitud_m, tipo_elemento="Pila",
         ksp = (3.0 + sd / d_punta) / ((10.0 / 3.0) * np.sqrt(1.0 + 300.0 * (td / sd)))
         d_fact = min(1.0 + 0.4 * (longitud_m / d_punta), 3.0)
         pu_kpa = qu_p * ksp * d_fact
-        fr_p = 0.35
+        fr_p = FR_PUNTA_BASE # 0.35
         cp_comp_kn = fr_p * (pu_kpa * ap)
         Em_base = max((10.0 ** (0.013 * icr_p - 1.34)) * 300.0 * qu_p, 300000.0)
         kv_base_ton_m3 = (Em_base / (d_punta * (1.0 - 0.25**2))) / 9.81
@@ -326,7 +339,7 @@ def evaluar_pila(df_tramos, naf_m, diametro_m, longitud_m, tipo_elemento="Pila",
         pts = df_tramos[(df_tramos['Prof_fin'] >= longitud_m) & (df_tramos['Prof_ini'] <= zona_inf)]
         n60_punta = min(pts['N60'].mean() if not pts.empty else estrato_p['N60'], 75.0)
         pu_kpa = 57.5 * n60_punta
-        fr_p = 0.35
+        fr_p = FR_PUNTA_BASE # 0.35
         cp_comp_kn = fr_p * (pu_kpa * ap)
         Es_base = 3500.0 * n60_punta
         kv_base_ton_m3 = (Es_base / (d_punta * (1.0 - 0.30**2))) / 9.81
@@ -335,7 +348,7 @@ def evaluar_pila(df_tramos, naf_m, diametro_m, longitud_m, tipo_elemento="Pila",
     else:
         cu_p = estrato_p['Cu_lab'] if (pd.notna(estrato_p.get('Cu_lab')) and estrato_p['Cu_lab'] > 0) else (factor_cu_spt * estrato_p['N60'])
         fre = (d_punta + 1.0) / (2.0 * d_punta + 1.0) if d_punta > 0.5 else 1.0
-        fr_p = 0.35
+        fr_p = FR_PUNTA_BASE # 0.35
         nc_star = 9.0
         cp_comp_kn = (cu_p * nc_star * fr_p + pv_total) * ap * fre
         pu_kpa = cp_comp_kn / (fr_p * ap)
@@ -400,7 +413,7 @@ def evaluar_pila(df_tramos, naf_m, diametro_m, longitud_m, tipo_elemento="Pila",
         'kv_base_t_m3': round(kv_base_ton_m3, 1),
         'Kv_cabeza_t_m': round(Kv_cabeza_ton_m, 1),
         'Kv_cabeza_t_cm': round(Kv_cabeza_ton_cm, 2),
-        'fr_cohesivo_aplicado': FR_COHESIVO_VIGENTE
+        'fr_cohesivo_aplicado': FR_COHESIVO_FAS
     }
 
 
