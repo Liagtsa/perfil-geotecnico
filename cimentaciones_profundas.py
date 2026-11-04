@@ -1,12 +1,27 @@
+# ==============================================================================
+# MODULO: cimentaciones_profundas.py
+# VERSION: 2.4.0-NTC2023-FR055-CALIBRADO
+# REVISION NORMATIVA: NTC-CDMX 2023 / NTC PUEBLA
+# MODIFICACIONES APLICADAS:
+#   1. Suelos Cohesivos: Metodo Alfa con FR = 0.55 (Tabla 3.6.1 NTC-CDMX FAS / Campo)
+#   2. Suelos Friccionantes: Friccion unitaria fui = min(3.0 * N60, 200.0 kPa) con FR = 0.50
+#   3. Formaciones Rocosas: Mecanica de rocas (ICR/RQD) con FR = 0.65 y qu conservador
+#   4. Extraccion: Criterio NTC 3.6.3.2 (castigo 0.80/0.60 y subpresion de NAF en concreto)
+# ==============================================================================
+
 import numpy as np
 import pandas as pd
 import re
 import math
 
+# Constante de control normativo para suelos cohesivos
+FR_COHESIVO_VIGENTE = 0.55
+
+
 def convertir_spt_campo(valor_raw):
     """
-    Convierte lecturas numéricas y de rechazo de campo en N de diseño.
-    Aplica el criterio conservador normativo de topar a 50 golpes máximos.
+    Convierte lecturas numericas y de rechazo de campo en N de diseno.
+    Aplica el criterio conservador normativo de topar a 50 golpes maximos.
     """
     if pd.isna(valor_raw): return np.nan
     if isinstance(valor_raw, (int, float)):
@@ -29,8 +44,8 @@ def convertir_spt_campo(valor_raw):
 
 def estimar_peso_volumetrico(tipo, sucs, n60, w_pct=None, f_pct=None, bajo_naf=False):
     """
-    Estima el peso volumétrico gamma (en kN/m3) combinando relaciones gravimétricas
-    de fases (w%, F%, Gs) con la compacidad/consistencia empírica de N60.
+    Estima el peso volumetrico gamma (en kN/m3) combinando relaciones gravimetricas
+    de fases (w%, F%, Gs) con la compacidad/consistencia empirica de N60.
     """
     gamma_w = 9.81
     if tipo == 'Roca' or 'ROCA' in str(sucs).upper():
@@ -69,7 +84,7 @@ def estimar_peso_volumetrico(tipo, sucs, n60, w_pct=None, f_pct=None, bajo_naf=F
 def procesar_sondeo_completo(xls_path_o_bytes):
     """
     Lee las hojas del archivo Excel, interpreta rechazos de SPT, aplica correcciones,
-    evalúa el peso específico de cada estrato y retorna la configuración unificada.
+    evalua el peso especifico de cada estrato y retorna la configuracion unificada.
     """
     xls = pd.ExcelFile(xls_path_o_bytes)
     df_proy = pd.read_excel(xls, 'Proyecto').set_index('Parametro')['Valor'].to_dict()
@@ -145,7 +160,6 @@ def procesar_sondeo_completo(xls_path_o_bytes):
             n_campo = 50.0 if tipo == 'Roca' else 10.0
             
         n_corr = n_campo
-        # Corrección por dilatancia bajo NAF en arenas finas sumergidas
         if (tipo == 'Friccionante') and (naf is not None and p_med > naf) and n_corr > 15:
             n_corr = 15.0 + 0.5 * (n_corr - 15.0)
             
@@ -187,12 +201,12 @@ def evaluar_pila(df_tramos, naf_m, diametro_m, longitud_m, tipo_elemento="Pila",
                  factor_cu_spt=6.0, gamma_concreto=24.0, fc_kg_cm2=300.0,
                  qu_roca_conservador=15000.0):
     """
-    Evalúa la capacidad de carga vertical a compresión y tensión según NTC-CDMX 2023:
-    1. Roca: Mecánica de rocas (3.6.2.3.5) con ICR/RQD y qu conservador si no hay ensaye destructivo.
-    2. Suelos Friccionantes: Fricción empírica SPT (3.6.2.3.2.3), fui = min(3.0*N60, 200 kPa), FR=0.50.
-    3. Suelos Cohesivos: Método Alfa con FR=0.55 (Tabla 3.6.1 NTC-CDMX 2023 / FAS), fui <= 200 kPa.
-       Punta en cohesivos con Nc*=9.0 y factor Fre = (B+1)/(2B+1).
-    4. NAF: Considera afectación por subpresión en pv_total y peso propio neto del concreto.
+    Evalua la capacidad de carga vertical a compresion y tension segun NTC-CDMX 2023:
+    - Roca: Mecanica de rocas (3.6.2.3.5) con ICR/RQD y qu conservador si no hay ensaye destructivo.
+    - Suelos Friccionantes: Friccion empirica SPT (3.6.2.3.2.3), fui = min(3.0*N60, 200 kPa), FR = 0.50.
+    - Suelos Cohesivos: Metodo Alfa con FR = 0.55 (Tabla 3.6.1 NTC-CDMX 2023 / FAS), fui <= 200 kPa.
+      Punta en cohesivos con Nc* = 9.0 y factor Fre = (B+1)/(2B+1).
+    - NAF: Considera afectacion por subpresion en pv_total y peso propio neto del concreto.
     """
     pp = np.pi * diametro_m
     z_act_ini = 1.50
@@ -228,7 +242,6 @@ def evaluar_pila(df_tramos, naf_m, diametro_m, longitud_m, tipo_elemento="Pila",
         long_real = min(tramo['Prof_fin'], longitud_m) - tramo['Prof_ini']
         if long_real <= 0: continue
             
-        # Consideración de NAF en esfuerzos verticales efectivos
         p_med = tramo['P_med']
         bajo_naf = (naf_m is not None and p_med > naf_m)
         gamma_eff = (tramo['Gamma'] - gamma_w) if bajo_naf else tramo['Gamma']
@@ -254,7 +267,6 @@ def evaluar_pila(df_tramos, naf_m, diametro_m, longitud_m, tipo_elemento="Pila",
             kh_local = (Em_kPa / (diametro_m * (1.0 - 0.25**2))) / 9.81
             norma = "NTC CDMX 3.6.2.3.5 (Roca)"
         elif tipo == 'Friccionante':
-            # NTC CDMX 3.6.2.3.2.3: fui = min(3.0 * N60, 200 kPa)
             fui = min(3.0 * n60, 200.0)
             fr_f = 0.50
             tramo_comp = fr_f * (pp * fui * long_fuste_efectiva)
@@ -262,15 +274,15 @@ def evaluar_pila(df_tramos, naf_m, diametro_m, longitud_m, tipo_elemento="Pila",
             nh_ton_m3 = 25.0 * n60
             kh_local = nh_ton_m3 * (tramo['P_med'] / diametro_m)
             norma = "NTC CDMX 3.6.2.3.2.3 (Arenas)"
-        else: # Cohesivo / Limo con Método Alfa y FR=0.55 (Tabla 3.6.1 NTC-CDMX / FAS)
+        else: # Cohesivo / Limo con Metodo Alfa y FR = 0.55
             cu = tramo['Cu_lab'] if (pd.notna(tramo.get('Cu_lab')) and tramo['Cu_lab'] > 0) else (factor_cu_spt * n60)
             alpha = max(0.35, min(1.0, 0.55 * np.sqrt(100.0 / max(cu, 25.0))))
             fui = min(alpha * cu, 200.0)
-            fr_f = 0.55  # Factor de resistencia NTC-CDMX 2023 Tabla 3.6.1 en suelos cohesivos (FAS / correlación)
+            fr_f = FR_COHESIVO_VIGENTE  # FR = 0.55 segun Tabla 3.6.1 NTC-CDMX 2023
             tramo_comp = fr_f * (pp * fui * long_fuste_efectiva)
             tramo_tens = fr_f * (pp * (fui * f_red_cohes) * long_fuste_efectiva)
             kh_local = (67.0 * cu / diametro_m) / 9.81
-            norma = "NTC CDMX 3.6.2.3.2.1 (Método Alfa, FR=0.55)"
+            norma = "NTC CDMX 3.6.2.3.2.1 (Metodo Alfa, FR=0.55)"
             
         cf_comp_kn += tramo_comp
         cf_tens_kn += tramo_tens
@@ -387,7 +399,8 @@ def evaluar_pila(df_tramos, naf_m, diametro_m, longitud_m, tipo_elemento="Pila",
         'Kh_lineal_t_m': round(Kh_resorte_lineal, 1),
         'kv_base_t_m3': round(kv_base_ton_m3, 1),
         'Kv_cabeza_t_m': round(Kv_cabeza_ton_m, 1),
-        'Kv_cabeza_t_cm': round(Kv_cabeza_ton_cm, 2)
+        'Kv_cabeza_t_cm': round(Kv_cabeza_ton_cm, 2),
+        'fr_cohesivo_aplicado': FR_COHESIVO_VIGENTE
     }
 
 
