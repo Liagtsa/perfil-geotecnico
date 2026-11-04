@@ -6,8 +6,7 @@ import math
 def convertir_spt_campo(valor_raw):
     """
     Convierte lecturas numéricas y de rechazo de campo en N de diseño.
-    Aplica el criterio conservador normativo de topar a 50 golpes máximos
-    para evitar sobreestimación de capacidades por falso rechazo.
+    Aplica el criterio conservador normativo de topar a 50 golpes máximos.
     """
     if pd.isna(valor_raw): return np.nan
     if isinstance(valor_raw, (int, float)):
@@ -146,6 +145,7 @@ def procesar_sondeo_completo(xls_path_o_bytes):
             n_campo = 50.0 if tipo == 'Roca' else 10.0
             
         n_corr = n_campo
+        # Corrección por dilatancia bajo NAF en arenas finas sumergidas
         if (tipo == 'Friccionante') and (naf is not None and p_med > naf) and n_corr > 15:
             n_corr = 15.0 + 0.5 * (n_corr - 15.0)
             
@@ -184,11 +184,15 @@ def procesar_sondeo_completo(xls_path_o_bytes):
 
 def evaluar_pila(df_tramos, naf_m, diametro_m, longitud_m, tipo_elemento="Pila",
                  con_campana=False, rel_campana=1.5, h_campana_m=1.0,
-                 factor_cu_spt=6.0, gamma_concreto=24.0, fc_kg_cm2=300.0):
+                 factor_cu_spt=6.0, gamma_concreto=24.0, fc_kg_cm2=300.0,
+                 qu_roca_conservador=15000.0):
     """
-    Evalúa la capacidad de carga vertical a compresión y tensión, así como
-    la rigidez axial Kv en cabeza y balasto promedio kh para una pila con
-    calibración geotécnica realista según NTC-CDMX 2023 / FHWA.
+    Evalúa la capacidad de carga vertical a compresión y tensión según NTC-CDMX 2023:
+    1. Roca: Mecánica de rocas (3.6.2.3.5) con ICR/RQD y qu conservador si no hay ensaye.
+    2. Suelos Friccionantes: Fricción empírica SPT (3.6.2.3.2.3), fui <= 200 kPa, FR=0.50.
+    3. Suelos Cohesivos: Método Alfa a partir de Su (cu = 6*N60 o laboratorio), fui <= 200 kPa, FR=0.70.
+       Punta en cohesivos con Nc*=9.0 y factor Fre = (B+1)/(2B+1).
+    4. NAF: Considera afectación por subpresión en pv_total y peso propio neto del concreto.
     """
     pp = np.pi * diametro_m
     z_act_ini = 1.50
@@ -215,6 +219,7 @@ def evaluar_pila(df_tramos, naf_m, diametro_m, longitud_m, tipo_elemento="Pila",
     f_red_roca = 0.70
     Ec_ton_m2 = (14000.0 * np.sqrt(fc_kg_cm2)) * 10.0
     
+    desglose_estratos = []
     kh_acumulado = 0.0
     peso_estratos = 0.0
 
@@ -223,7 +228,11 @@ def evaluar_pila(df_tramos, naf_m, diametro_m, longitud_m, tipo_elemento="Pila",
         long_real = min(tramo['Prof_fin'], longitud_m) - tramo['Prof_ini']
         if long_real <= 0: continue
             
-        pv_total += tramo['Gamma'] * long_real
+        # Consideración de NAF en esfuerzos verticales efectivos
+        p_med = tramo['P_med']
+        bajo_naf = (naf_m is not None and p_med > naf_m)
+        gamma_eff = (tramo['Gamma'] - gamma_w) if bajo_naf else tramo['Gamma']
+        pv_total += gamma_eff * long_real
         
         ini_fuste = max(tramo['Prof_ini'], z_act_ini)
         fin_fuste = min(tramo['Prof_fin'], z_act_fin)
@@ -235,40 +244,51 @@ def evaluar_pila(df_tramos, naf_m, diametro_m, longitud_m, tipo_elemento="Pila",
         if tipo == 'Roca':
             icr = tramo['ICR'] if pd.notna(tramo.get('ICR')) else 20.0
             qu_medido = pd.notna(tramo.get('qu_kPa')) and tramo['qu_kPa'] > 0
-            qu = tramo['qu_kPa'] if qu_medido else 3000.0  # Roca intemperizada/rechazo SPT sin ensaye triaxial
+            qu = tramo['qu_kPa'] if qu_medido else qu_roca_conservador
             alpha_e = 10.0 ** (0.013 * icr - 1.34)
-            fui_calc = 1.4 * pa * np.sqrt(alpha_e * qu / pa)
-            fui = min(fui_calc, 250.0 if not qu_medido else 3000.0)  # Cota realista en roca/rechazo
+            fui = min(1.4 * pa * np.sqrt(alpha_e * qu / pa), 3000.0)
             fr_f = 0.65
             tramo_comp = fr_f * (pp * fui * long_fuste_efectiva)
             tramo_tens = fr_f * (pp * (fui * f_red_roca) * long_fuste_efectiva)
             Em_kPa = max(alpha_e * 300.0 * qu, 150000.0)
             kh_local = (Em_kPa / (diametro_m * (1.0 - 0.25**2))) / 9.81
+            norma = "NTC CDMX 3.6.2.3.5 (Roca)"
         elif tipo == 'Friccionante':
-            fui = min(3.0 * n60, 150.0)
+            fui = min(2.5 * n60, 200.0)
             fr_f = 0.50
             tramo_comp = fr_f * (pp * fui * long_fuste_efectiva)
             tramo_tens = fr_f * (pp * (fui * f_red_fricc) * long_fuste_efectiva)
             nh_ton_m3 = 25.0 * n60
             kh_local = nh_ton_m3 * (tramo['P_med'] / diametro_m)
-        else: # Cohesivo / Limo
+            norma = "NTC CDMX 3.6.2.3.2.3 (Arenas)"
+        else: # Cohesivo / Limo con Método Alfa
             cu = tramo['Cu_lab'] if (pd.notna(tramo.get('Cu_lab')) and tramo['Cu_lab'] > 0) else (factor_cu_spt * n60)
-            # Factor alfa de adherencia Tomlinson / FHWA / NTC-CDMX 3.6.2.3.1
             alpha = max(0.35, min(1.0, 0.55 * np.sqrt(100.0 / max(cu, 25.0))))
-            fui = min(alpha * cu, 120.0)  # Cota normativa en fuste de arcillas/limos firmes
+            fui = min(alpha * cu, 200.0)
             fr_f = 0.70
             tramo_comp = fr_f * (pp * fui * long_fuste_efectiva)
             tramo_tens = fr_f * (pp * (fui * f_red_cohes) * long_fuste_efectiva)
             kh_local = (67.0 * cu / diametro_m) / 9.81
+            norma = "NTC CDMX 3.6.2.3.2.1 (Método Alfa)"
             
         cf_comp_kn += tramo_comp
         cf_tens_kn += tramo_tens
         kh_acumulado += kh_local * long_real
         peso_estratos += long_real
 
+        desglose_estratos.append({
+            'zt': tramo['Prof_ini'], 'zb': min(tramo['Prof_fin'], longitud_m),
+            'l_efec': long_fuste_efectiva, 'tipo': tipo, 'sucs': tramo['SUCS'],
+            'n60': n60, 'fui_kpa': fui, 'fr_f': fr_f,
+            'f_nom_ton': (pp * fui * long_fuste_efectiva) / 9.81,
+            'f_red_ton': tramo_comp / 9.81,
+            'kh_local': kh_local, 'norma': norma
+        })
+
     kh_prom_ton_m3 = (kh_acumulado / peso_estratos) if peso_estratos > 0 else 1500.0
     Kh_resorte_lineal = kh_prom_ton_m3 * diametro_m
 
+    # Punta
     estrato_punta = df_tramos[(df_tramos['Prof_ini'] <= longitud_m) & (df_tramos['Prof_fin'] >= longitud_m)]
     estrato_p = estrato_punta.iloc[0] if not estrato_punta.empty else df_tramos.iloc[-1]
     tipo_p = estrato_p['Tipo']
@@ -276,37 +296,50 @@ def evaluar_pila(df_tramos, naf_m, diametro_m, longitud_m, tipo_elemento="Pila",
     if tipo_p == 'Roca':
         icr_p = estrato_p['ICR'] if pd.notna(estrato_p.get('ICR')) else 20.0
         qu_medido = pd.notna(estrato_p.get('qu_kPa')) and estrato_p['qu_kPa'] > 0
-        qu_p = estrato_p['qu_kPa'] if qu_medido else 5000.0
+        qu_p = estrato_p['qu_kPa'] if qu_medido else qu_roca_conservador
         sd = max(0.05, 0.05 + 0.95 * (icr_p / 100.0)**2)
         td = 0.002
         ksp = (3.0 + sd / d_punta) / ((10.0 / 3.0) * np.sqrt(1.0 + 300.0 * (td / sd)))
         d_fact = min(1.0 + 0.4 * (longitud_m / d_punta), 3.0)
-        pu = qu_p * ksp * d_fact
-        cp_comp_kn = 0.35 * (pu * ap)
+        pu_kpa = qu_p * ksp * d_fact
+        fr_p = 0.35
+        cp_comp_kn = fr_p * (pu_kpa * ap)
         Em_base = max((10.0 ** (0.013 * icr_p - 1.34)) * 300.0 * qu_p, 300000.0)
         kv_base_ton_m3 = (Em_base / (d_punta * (1.0 - 0.25**2))) / 9.81
+        detalles_punta = f"Roca (qu={qu_p/1000:.1f} MPa, ICR={icr_p:.1f}%)"
+        norma_punta = "NTC CDMX 3.6.2.3.5 (Roca)"
     elif tipo_p == 'Friccionante':
         zona_inf = longitud_m + 2.0 * d_punta
         pts = df_tramos[(df_tramos['Prof_fin'] >= longitud_m) & (df_tramos['Prof_ini'] <= zona_inf)]
-        n60_punta = min(pts['N60'].mean() if not pts.empty else estrato_p['N60'], 50.0)
-        pu = 60.0 * n60_punta
-        cp_comp_kn = 0.35 * (pu * ap)
+        n60_punta = min(pts['N60'].mean() if not pts.empty else estrato_p['N60'], 75.0)
+        pu_kpa = 57.5 * n60_punta
+        fr_p = 0.35
+        cp_comp_kn = fr_p * (pu_kpa * ap)
         Es_base = 3500.0 * n60_punta
         kv_base_ton_m3 = (Es_base / (d_punta * (1.0 - 0.30**2))) / 9.81
+        detalles_punta = f"Arena (N60_punta={n60_punta:.1f})"
+        norma_punta = "NTC CDMX 3.6.2.3.2.4.2 (SPT)"
     else:
         cu_p = estrato_p['Cu_lab'] if (pd.notna(estrato_p.get('Cu_lab')) and estrato_p['Cu_lab'] > 0) else (factor_cu_spt * estrato_p['N60'])
         fre = (d_punta + 1.0) / (2.0 * d_punta + 1.0) if d_punta > 0.5 else 1.0
-        pu_kpa = min((cu_p * 9.0 * 0.35) + pv_total, 3500.0)
-        cp_comp_kn = pu_kpa * ap * fre
+        fr_p = 0.35
+        nc_star = 9.0
+        cp_comp_kn = (cu_p * nc_star * fr_p + pv_total) * ap * fre
+        pu_kpa = cp_comp_kn / (fr_p * ap)
         Es_base = 600.0 * cu_p
         kv_base_ton_m3 = (Es_base / (d_punta * (1.0 - 0.40**2))) / 9.81
+        detalles_punta = f"Limo/Arcilla (cu={cu_p:.1f} kPa, Nc*=9, Fre={fre:.3f})"
+        norma_punta = "NTC Puebla / CDMX (Cohesivo)"
 
     vol_fuste = (np.pi * (diametro_m**2) / 4.0) * (longitud_m - (h_campana_m if con_campana else 0.0))
     vol_campana = ((np.pi * h_campana_m / 12.0) * (diametro_m**2 + diametro_m * d_punta + d_punta**2)) if con_campana else 0.0
     vol_total = vol_fuste + vol_campana
     
+    # Afectación del NAF en peso propio de la pila (Tensión / Extracción)
     if naf_m is not None and naf_m < longitud_m:
-        frac_sum = max(0.0, (longitud_m - naf_m) / longitud_m)
+        h_seco = min(naf_m, longitud_m)
+        h_sum = max(0.0, longitud_m - naf_m)
+        frac_sum = h_sum / longitud_m
         vol_sum = vol_total * frac_sum
         vol_sec = vol_total - vol_sum
         peso_kn = (vol_sec * gamma_concreto) + (vol_sum * (gamma_concreto - gamma_w))
@@ -326,15 +359,33 @@ def evaluar_pila(df_tramos, naf_m, diametro_m, longitud_m, tipo_elemento="Pila",
     return {
         'Diametro_m': diametro_m,
         'Longitud_m': longitud_m,
+        'D': diametro_m,
+        'L': longitud_m,
+        'd_punta': d_punta,
+        'Area_fuste': np.pi * (diametro_m**2) / 4.0,
+        'Area_punta': ap,
+        'Perimetro': pp,
+        'z_act_ini': z_act_ini,
+        'z_act_fin': z_act_fin,
         'Long_fuste_activa_m': round(max(0.0, z_act_fin - z_act_ini), 2),
+        'L_fuste_activa': max(0.0, z_act_fin - z_act_ini),
+        'desglose_estratos': desglose_estratos,
+        'Cf_nom_ton': sum(e['f_nom_ton'] for e in desglose_estratos),
         'Cf_comp_ton': round(cf_comp_kn / 9.81, 1),
+        'pu_kpa': pu_kpa,
+        'pu_ton_m2': round(pu_kpa / 9.81, 1),
+        'Rup_ton': round((pu_kpa * ap) / 9.81, 1),
         'Cp_comp_ton': round(cp_comp_kn / 9.81, 1),
         'R_comp_ton': round(r_comp_ton, 1),
         'W_ton': round(peso_kn / 9.81, 1),
+        'W_concreto_ton': round(peso_kn / 9.81, 1),
         'Cf_tens_ton': round(cf_tens_kn / 9.81, 1),
         'R_tens_ton': round(r_tens_ton, 1),
         'As_tensin_cm2': round(as_req_cm2, 1),
+        'detalles_punta': detalles_punta,
+        'norma_punta': norma_punta,
         'kh_t_m3': round(kh_prom_ton_m3, 1),
+        'kh_prom_t_m3': round(kh_prom_ton_m3, 1),
         'Kh_lineal_t_m': round(Kh_resorte_lineal, 1),
         'kv_base_t_m3': round(kv_base_ton_m3, 1),
         'Kv_cabeza_t_m': round(Kv_cabeza_ton_m, 1),
@@ -344,10 +395,6 @@ def evaluar_pila(df_tramos, naf_m, diametro_m, longitud_m, tipo_elemento="Pila",
 
 def generar_matrices_parametricas(df_tramos, naf_m, diametros, profundidades, tipo_elemento="Pila",
                                    con_campana=False, rel_campana=1.5, h_campana_m=1.0):
-    """
-    Genera las matrices paramétricas de compresión, tensión, acero, kh y Kv.
-    Retorna además los metadatos de configuración para sincronización con la memoria PDF.
-    """
     res = []
     for l in profundidades:
         for d in diametros:
@@ -371,10 +418,6 @@ def generar_matrices_parametricas(df_tramos, naf_m, diametros, profundidades, ti
 
 
 def obtener_tabla_balasto_metro_a_metro(df_tramos, naf_m, diametro_m, longitud_m):
-    """
-    Genera el desglose metro a metro de los módulos de reacción horizontal y vertical.
-    Retorna un DataFrame para consulta en pantalla y descarga en CSV.
-    """
     n_metros = int(math.ceil(longitud_m))
     filas = []
     
@@ -394,7 +437,7 @@ def obtener_tabla_balasto_metro_a_metro(df_tramos, naf_m, diametro_m, longitud_m
         if tipo == 'Roca':
             icr = e_match['ICR'] if pd.notna(e_match.get('ICR')) else 20.0
             qu_medido = pd.notna(e_match.get('qu_kPa')) and e_match['qu_kPa'] > 0
-            qu = e_match['qu_kPa'] if qu_medido else 3000.0
+            qu = e_match['qu_kPa'] if qu_medido else 15000.0
             alpha_e = 10.0 ** (0.013 * icr - 1.34)
             Em_kPa = max(alpha_e * 300.0 * qu, 150000.0)
             kh_local = (Em_kPa / (diametro_m * (1.0 - 0.25**2))) / 9.81

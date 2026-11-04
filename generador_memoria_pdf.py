@@ -39,202 +39,7 @@ def crear_encabezado_memoria(fig, titulo_pagina, num_pagina, total_paginas, p_pr
     fig.lines.append(plt.Line2D([0.05, 0.95], [0.870, 0.870], transform=fig.transFigure, color='black', lw=1.5))
 
 # ==========================================================
-# 2. MOTOR DE DESGLOSE ANALÍTICO DETALLADO
-# ==========================================================
-def desglosar_calculo_pila(df_tramos, naf_m, diametro_m, longitud_m,
-                            con_campana=False, rel_campana=1.5, h_campana_m=1.0,
-                            factor_cu_spt=6.0, gamma_concreto=24.0, fc_kg_cm2=300.0):
-    pp = np.pi * diametro_m
-    z_act_ini = 1.50
-    
-    if con_campana:
-        d_punta = diametro_m * rel_campana
-        ap = (np.pi * (d_punta ** 2)) / 4.0
-        z_act_fin = max(z_act_ini, longitud_m - h_campana_m - diametro_m)
-    else:
-        d_punta = diametro_m
-        ap = (np.pi * (d_punta ** 2)) / 4.0
-        z_act_fin = max(z_act_ini, longitud_m - diametro_m)
-        
-    l_d = longitud_m / diametro_m
-    gamma_w = 9.81
-    pa = 100.0
-    f_red_fricc = 0.80 if l_d > 20.0 else 0.60
-    f_red_cohes = 0.80
-    f_red_roca = 0.70
-    Ec_ton_m2 = (14000.0 * np.sqrt(fc_kg_cm2)) * 10.0
-    
-    desglose_estratos = []
-    cf_comp_kn = 0.0
-    cf_tens_kn = 0.0
-    pv_total = 0.0
-    kh_acumulado = 0.0
-    peso_estratos = 0.0
-    
-    for _, tramo in df_tramos.iterrows():
-        if tramo['Prof_ini'] >= longitud_m: break
-        long_real = min(tramo['Prof_fin'], longitud_m) - tramo['Prof_ini']
-        if long_real <= 0: continue
-            
-        pv_total += tramo['Gamma'] * long_real
-        
-        ini_f = max(tramo['Prof_ini'], z_act_ini)
-        fin_f = min(tramo['Prof_fin'], z_act_fin)
-        l_efec = max(0.0, fin_f - ini_f)
-        
-        n60 = tramo['N60']
-        tipo = tramo['Tipo']
-        
-        if tipo == 'Roca':
-            icr = tramo['ICR'] if pd.notna(tramo.get('ICR')) else 20.0
-            qu_medido = pd.notna(tramo.get('qu_kPa')) and tramo['qu_kPa'] > 0
-            qu = tramo['qu_kPa'] if qu_medido else 3000.0
-            alpha_e = 10.0 ** (0.013 * icr - 1.34)
-            fui_calc = 1.4 * pa * np.sqrt(alpha_e * qu / pa)
-            fui = min(fui_calc, 250.0 if not qu_medido else 3000.0)
-            fr_f = 0.65
-            tramo_comp = fr_f * (pp * fui * l_efec)
-            tramo_tens = fr_f * (pp * (fui * f_red_roca) * l_efec)
-            Em_kPa = max(alpha_e * 300.0 * qu, 150000.0)
-            kh_local = (Em_kPa / (diametro_m * (1.0 - 0.25**2))) / 9.81
-            norma = "NTC CDMX Roca"
-        elif tipo == 'Friccionante':
-            fui = min(3.0 * n60, 150.0)
-            fr_f = 0.50
-            tramo_comp = fr_f * (pp * fui * l_efec)
-            tramo_tens = fr_f * (pp * (fui * f_red_fricc) * l_efec)
-            nh_ton_m3 = 25.0 * n60
-            kh_local = nh_ton_m3 * (tramo['P_med'] / diametro_m)
-            norma = "NTC CDMX Arenas"
-        else: # Cohesivo / Limo
-            cu = tramo['Cu_lab'] if (pd.notna(tramo.get('Cu_lab')) and tramo['Cu_lab'] > 0) else (factor_cu_spt * n60)
-            alpha = max(0.35, min(1.0, 0.55 * np.sqrt(100.0 / max(cu, 25.0))))
-            fui = min(alpha * cu, 120.0)
-            fr_f = 0.70
-            tramo_comp = fr_f * (pp * fui * l_efec)
-            tramo_tens = fr_f * (pp * (fui * f_red_cohes) * l_efec)
-            kh_local = (67.0 * cu / diametro_m) / 9.81
-            norma = "NTC Puebla Arcillas"
-            
-        cf_comp_kn += tramo_comp
-        cf_tens_kn += tramo_tens
-        kh_acumulado += kh_local * long_real
-        peso_estratos += long_real
-        
-        desglose_estratos.append({
-            'zt': tramo['Prof_ini'],
-            'zb': min(tramo['Prof_fin'], longitud_m),
-            'l_efec': l_efec,
-            'tipo': tipo,
-            'sucs': tramo['SUCS'],
-            'n60': n60,
-            'fui_kpa': fui,
-            'fr_f': fr_f,
-            'f_nom_ton': (pp * fui * l_efec) / 9.81,
-            'f_red_ton': tramo_comp / 9.81,
-            'kh_local': kh_local,
-            'norma': norma
-        })
-        
-    kh_prom_ton_m3 = (kh_acumulado / peso_estratos) if peso_estratos > 0 else 1500.0
-    Kh_resorte_lineal = kh_prom_ton_m3 * diametro_m
-    
-    # Punta
-    estrato_punta = df_tramos[(df_tramos['Prof_ini'] <= longitud_m) & (df_tramos['Prof_fin'] >= longitud_m)]
-    estrato_p = estrato_punta.iloc[0] if not estrato_punta.empty else df_tramos.iloc[-1]
-    tipo_p = estrato_p['Tipo']
-    
-    if tipo_p == 'Roca':
-        icr_p = estrato_p['ICR'] if pd.notna(estrato_p.get('ICR')) else 20.0
-        qu_medido = pd.notna(estrato_p.get('qu_kPa')) and estrato_p['qu_kPa'] > 0
-        qu_p = estrato_p['qu_kPa'] if qu_medido else 5000.0
-        sd = max(0.05, 0.05 + 0.95 * (icr_p / 100.0)**2)
-        td = 0.002
-        ksp = (3.0 + sd / d_punta) / ((10.0 / 3.0) * np.sqrt(1.0 + 300.0 * (td / sd)))
-        d_fact = min(1.0 + 0.4 * (longitud_m / d_punta), 3.0)
-        pu_kpa = qu_p * ksp * d_fact
-        fr_p = 0.35
-        cp_comp_kn = fr_p * (pu_kpa * ap)
-        Em_base = max((10.0 ** (0.013 * icr_p - 1.34)) * 300.0 * qu_p, 300000.0)
-        kv_base_ton_m3 = (Em_base / (d_punta * (1.0 - 0.25**2))) / 9.81
-        detalles_punta = f"Roca (qu={qu_p/1000:.1f} MPa, ICR={icr_p:.1f}%, Ksp={ksp:.3f})"
-        norma_punta = "NTC CDMX Roca"
-    elif tipo_p == 'Friccionante':
-        zona_inf = longitud_m + 2.0 * d_punta
-        pts = df_tramos[(df_tramos['Prof_fin'] >= longitud_m) & (df_tramos['Prof_ini'] <= zona_inf)]
-        n60_punta = min(pts['N60'].mean() if not pts.empty else estrato_p['N60'], 50.0)
-        pu_kpa = 60.0 * n60_punta
-        fr_p = 0.35
-        cp_comp_kn = fr_p * (pu_kpa * ap)
-        Es_base = 3500.0 * n60_punta
-        kv_base_ton_m3 = (Es_base / (d_punta * (1.0 - 0.30**2))) / 9.81
-        detalles_punta = f"Arena (N60_punta={n60_punta:.1f} en 2D)"
-        norma_punta = "NTC CDMX Arenas"
-    else:
-        cu_p = estrato_p['Cu_lab'] if (pd.notna(estrato_p.get('Cu_lab')) and estrato_p['Cu_lab'] > 0) else (factor_cu_spt * estrato_p['N60'])
-        fre = (d_punta + 1.0) / (2.0 * d_punta + 1.0) if d_punta > 0.5 else 1.0
-        fr_p = 0.35
-        pu_kpa = min((cu_p * 9.0 * fr_p + pv_total) * fre / fr_p, 3500.0)
-        cp_comp_kn = pu_kpa * fr_p * ap
-        Es_base = 600.0 * cu_p
-        kv_base_ton_m3 = (Es_base / (d_punta * (1.0 - 0.40**2))) / 9.81
-        detalles_punta = f"Arcilla (cu={cu_p:.1f} kPa, Nc*=9.0)"
-        norma_punta = "NTC Puebla Arcillas"
-        
-    vol_fuste = (np.pi * (diametro_m**2) / 4.0) * (longitud_m - (h_campana_m if con_campana else 0.0))
-    vol_campana = ((np.pi * h_campana_m / 12.0) * (diametro_m**2 + diametro_m * d_punta + d_punta**2)) if con_campana else 0.0
-    vol_total = vol_fuste + vol_campana
-    
-    if naf_m is not None and naf_m < longitud_m:
-        frac_sum = max(0.0, (longitud_m - naf_m) / longitud_m)
-        vol_sum = vol_total * frac_sum
-        vol_sec = vol_total - vol_sum
-        peso_kn = (vol_sec * gamma_concreto) + (vol_sum * (gamma_concreto - gamma_w))
-    else:
-        peso_kn = vol_total * gamma_concreto
-        
-    r_comp_ton = (cf_comp_kn + cp_comp_kn) / 9.81
-    r_tens_ton = (cf_tens_kn + peso_kn) / 9.81
-    as_req_cm2 = (r_tens_ton * 1000.0) / (0.90 * 4200.0)
-    
-    xi = (cp_comp_kn + 0.5 * cf_comp_kn) / max(cf_comp_kn + cp_comp_kn, 1.0)
-    flex_fuste = (xi * longitud_m) / (ap * Ec_ton_m2)
-    flex_base = 1.0 / max(kv_base_ton_m3 * ap, 1.0)
-    Kv_cabeza_ton_m = 1.0 / (flex_fuste + flex_base)
-    Kv_cabeza_ton_cm = Kv_cabeza_ton_m / 100.0
-    
-    return {
-        'D': diametro_m,
-        'L': longitud_m,
-        'd_punta': d_punta,
-        'Area_fuste': np.pi * (diametro_m**2) / 4.0,
-        'Area_punta': ap,
-        'Perimetro': pp,
-        'z_act_ini': z_act_ini,
-        'z_act_fin': z_act_fin,
-        'L_fuste_activa': max(0.0, z_act_fin - z_act_ini),
-        'desglose_estratos': desglose_estratos,
-        'Cf_nom_ton': sum(e['f_nom_ton'] for e in desglose_estratos),
-        'Cf_comp_ton': cf_comp_kn / 9.81,
-        'pu_kpa': pu_kpa,
-        'pu_ton_m2': pu_kpa / 9.81,
-        'Rup_ton': (pu_kpa * ap) / 9.81,
-        'Cp_comp_ton': cp_comp_kn / 9.81,
-        'R_comp_ton': r_comp_ton,
-        'W_concreto_ton': peso_kn / 9.81,
-        'Cf_tens_ton': cf_tens_kn / 9.81,
-        'R_tens_ton': r_tens_ton,
-        'As_tensin_cm2': as_req_cm2,
-        'detalles_punta': detalles_punta,
-        'norma_punta': norma_punta,
-        'kh_prom_t_m3': kh_prom_ton_m3,
-        'Kh_lineal_t_m': Kh_resorte_lineal,
-        'kv_base_t_m3': kv_base_ton_m3,
-        'Kv_cabeza_t_cm': Kv_cabeza_ton_cm
-    }
-
-# ==========================================================
-# 3. ESQUEMA GEOMÉTRICO PARAMÉTRICO
+# 2. ESQUEMA GEOMÉTRICO PARAMÉTRICO
 # ==========================================================
 def dibujar_esquemas(fig, D_val, L_val, naf_m):
     ax1 = fig.add_axes([0.08, 0.44, 0.42, 0.38])
@@ -296,14 +101,11 @@ def dibujar_esquemas(fig, D_val, L_val, naf_m):
     ax2.axis('off')
 
 # ==========================================================
-# 4. FUNCIÓN PRINCIPAL GENERADORA DE LA MEMORIA
+# 3. FUNCIÓN PRINCIPAL GENERADORA DE LA MEMORIA
 # ==========================================================
 def generar_memoria_calculo_pdf(df_tramos, matrices, p_proy, p_elem, *args, **kwargs):
-    """
-    Soporta llamadas flexibles de 5 o 6 argumentos indistintamente:
-    - (df_tramos, matrices, p_proy, p_elem, p_fecha)
-    - (df_tramos, matrices, p_proy, p_elem, p_sondeo, p_fecha)
-    """
+    import cimentaciones_profundas
+    
     if len(args) >= 2:
         p_sondeo = str(args[0])
         p_fecha = str(args[1])
@@ -338,28 +140,26 @@ def generar_memoria_calculo_pdf(df_tramos, matrices, p_proy, p_elem, *args, **kw
         if not sub.empty: bloques_estratos.append(sub)
     num_pags_estratos = len(bloques_estratos)
     
-    # Sincronización de configuración
     con_campana = matrices.get('con_campana', False)
     rel_campana = matrices.get('rel_campana', 1.5)
     h_campana_m = matrices.get('h_campana_m', 1.0)
     naf_m = matrices.get('naf_m', None)
     
-    # Desglose representativo de pilas (8 casos estándar)
     casos_analisis = []
     for d in diametros:
         casos_analisis.append((d, longitudes[-1]))
         if len(longitudes) > 1 and (d, longitudes[0]) not in casos_analisis:
             casos_analisis.append((d, longitudes[0]))
             
-    desgloses = [
-        desglosar_calculo_pila(
+    desgloses = []
+    for d, l in casos_analisis:
+        desglose = cimentaciones_profundas.evaluar_pila(
             df_tramos, naf_m=naf_m, diametro_m=d, longitud_m=l,
             con_campana=con_campana, rel_campana=rel_campana, h_campana_m=h_campana_m
-        ) 
-        for d, l in casos_analisis
-    ]
+        )
+        desgloses.append(desglose)
     
-    # Estructura ejecutiva de 22 páginas exactas (1 metodología + estratigrafía + 1 esquema + 16 desglose + 1 gráficas + 1 resumen)
+    # Estructura ejecutiva de 22 páginas exactas
     total_paginas = 1 + num_pags_estratos + 1 + (len(desgloses) * 2) + 2
     
     with PdfPages(pdf_buffer) as pdf:
@@ -379,24 +179,24 @@ def generar_memoria_calculo_pdf(df_tramos, matrices, p_proy, p_elem, *args, **kw
             "   - Corrección por Energía y Equipo: N60 = N' * C_E * C_B * C_S * C_R (con tope conservador N60 <= 50)\n"
             "   - Confinamiento efectivo: (N1)60 = N60 * min(sqrt(100 / sigma'_v), 1.7).\n\n"
             "B. CAPACIDAD EN CIMENTACIONES PROFUNDAS (Pilas Perforadas)\n"
-            "   - Suelos Friccionantes (NTC CDMX 3.6.2.3.2.3): fui = min(3*N60, 150 kPa); FR_fuste = 0.50.\n"
-            "     Punta: pu = 60 * N60_punta (<= 50 en 2D); FR_punta = 0.35.\n"
-            "   - Suelos Cohesivos (NTC CDMX 3.6.2.3.1 / Puebla): fui = min(alpha * cu, 120 kPa); FR_fuste = 0.70.\n"
+            "   - Suelos Friccionantes (NTC CDMX 3.6.2.3.2.3): fui = min(2.5 * N60, 200 kPa); FR_fuste = 0.50.\n"
+            "     Punta: pu = 57.5 * N60_punta (<= 75 golpes); FR_punta = 0.35.\n"
+            "   - Suelos Cohesivos (Método Alfa NTC 3.6.2.3.2.1): fui = min(alpha * cu, 200 kPa); FR_fuste = 0.70.\n"
             "     Punta: Cp = (cu * Nc* * FR + pv) * Ap * Fre; Nc* = 9.0; FR = 0.35; Fre = (B+1)/(2B+1).\n"
-            "   - Formaciones Rocosas (NTC CDMX 3.6.2.3.5): fui = min(1.4*Pa*sqrt(alpha_E*qu/Pa), 250 kPa); FR_f = 0.65.\n"
+            "   - Formaciones Rocosas (NTC CDMX 3.6.2.3.5): fui = min(1.4*Pa*sqrt(alpha_E*qu/Pa), 3000 kPa); FR_f = 0.65.\n"
             "     Punta: pu = qu * Ksp * d; FR_p = 0.35; alpha_E = 10^(0.013*ICR - 1.34).\n\n"
             "C. RESTRICCIONES GEOTÉCNICAS OBLIGATORIAS (FHWA-NHI-10-016 / NTC 2023)\n"
             "   - Se desprecian los primeros 1,500 mm (1.50 m) de fuste por remoldeo y relajación superficial.\n"
             "   - Se desprecia 1.0·D de fuste antes de la punta por interacción destructiva de esfuerzos.\n"
-            "   - Extracción / Tensión: Fricción penalizada al 80% (60% para L/D <= 20) + Peso del concreto.\n\n"
+            "   - Extracción / Tensión: Fricción penalizada al 80% (60% para L/D <= 20) + Peso del concreto neto.\n\n"
             "D. ESTIMACIÓN DEL PESO VOLUMÉTRICO ESTRATIFICADO\n"
-            "   - En roca y formaciones consolidadas se asignan densidades de 21.0 a 24.5 kN/m³."
+            "   - En estratos granulares/cohesivos se estima gamma según F%, W% y compacidad/consistencia (N60)."
         )
         fig.text(0.08, 0.84, texto_pg1, va='top', ha='left', fontsize=8.5, family='monospace')
         pdf.savefig(fig); plt.close(); contador += 1
 
         # --------------------------------------------------------
-        # PÁGINAS DE ESTRATIGRAFÍA (MÁXIMO 42 FILAS, SIN TRASLAPE)
+        # PÁGINAS DE ESTRATIGRAFÍA
         # --------------------------------------------------------
         for sub_df in bloques_estratos:
             fig = plt.figure(figsize=(8.5, 11))
@@ -462,17 +262,18 @@ def generar_memoria_calculo_pdf(df_tramos, matrices, p_proy, p_elem, *args, **kw
             "3. Parámetros de Interacción para Software Estructural (ETABS / SAP2000):\n"
             "   - Coeficiente de Balasto Lateral (kh): Extraído metro a metro en las siguientes hojas para la asignación\n"
             "     de resortes laterales tipo Winkler en el análisis no lineal de interacción suelo-estructura.\n"
+            "     * Asignación: K_resorte_nodal = kh * D * L_tributaria (ton/m)\n"
             "   - Rigidez Axial Vertical (Kv): Representa la constante elástica del resorte en cabeza (t/cm)."
         )
         fig.text(0.08, 0.36, texto_esq, va='top', ha='left', fontsize=8.5, family='monospace')
         pdf.savefig(fig); plt.close(); contador += 1
 
         # --------------------------------------------------------
-        # PÁGINAS DE DESGLOSE: EXACTAMENTE 2 PÁGINAS POR CASO
+        # PÁGINAS DE DESGLOSE: 2 PÁGINAS POR CASO
         # --------------------------------------------------------
         for idx_caso, r in enumerate(desgloses):
             
-            # --- HOJA 1 DEL CASO: MEMORIA DE CÁLCULO ANALÍTICA (1 PÁGINA) ---
+            # --- HOJA 1: MEMORIA DE CÁLCULO ---
             fig = plt.figure(figsize=(8.5, 11))
             crear_encabezado_memoria(fig, f"DESGLOSE CAPACIDAD AXIAL (Caso {idx_caso+1} de {len(desgloses)})", contador, total_paginas, p_proy, p_elem, p_sondeo, p_fecha)
             
@@ -481,12 +282,12 @@ def generar_memoria_calculo_pdf(df_tramos, matrices, p_proy, p_elem, *args, **kw
                 f"====================================================================================\n"
                 f" > PILA PROFUNDA: Diámetro D = {r['D']:.2f} m | Longitud L = {r['L']:.2f} m\n"
                 f"   Perímetro Fuste: {r['Perimetro']:.2f} m | Área Punta (Ap): {r['Area_punta']:.3f} m²\n"
-                f"   Volumen Concreto: {(r['Area_fuste']*r['L']):.2f} m³ | Peso Concreto Neto (W): {r['W_concreto_ton']:.1f} t\n"
+                f"   Volumen Concreto: {(r['Area_fuste']*r['L']):.2f} m³ | Peso Concreto Neto (W): {r['W_ton']:.1f} t\n"
                 f"   Criterio de Fuste: 1.50 m superior y 1.0·D en la base anulados (FHWA-NHI-10-016)\n"
-                f"   Zona Activa de Fuste: {r['z_act_ini']:.2f} m a {r['z_act_fin']:.2f} m (Longitud Efectiva = {r['L_fuste_activa']:.2f} m)\n\n"
+                f"   Zona Activa de Fuste: {r['z_act_ini']:.2f} m a {r['z_act_fin']:.2f} m (Longitud Efectiva = {r['Long_fuste_activa_m']:.2f} m)\n\n"
                 f"A. INTEGRACIÓN DE RESISTENCIA POR FRICCIÓN LATERAL:\n"
                 f"   - Sumatoria de Fricción Nominal Acumulada (Ruf) = {r['Cf_nom_ton']:.1f} toneladas\n"
-                f"   - Factor de Resistencia de Fuste aplicado: FR = 0.50 (Arenas) / 0.70 (Arcillas)\n"
+                f"   - Fricción unitaria máxima acotada por norma: fui <= 200 kPa (Ec. 3.6.2.3.2.4.3)\n"
                 f"   => CAPACIDAD REDUCIDA POR FRICCIÓN (Cf = sum FR · F_nom) = {r['Cf_comp_ton']:.1f} toneladas\n\n"
                 f"B. CAPACIDAD DE CARGA EN LA BASE / PUNTA (Cota de Desplante -{r['L']:.2f} m):\n"
                 f"   - Estrato de apoyo: {r['detalles_punta']} [{r['norma_punta']}]\n"
@@ -499,13 +300,13 @@ def generar_memoria_calculo_pdf(df_tramos, matrices, p_proy, p_elem, *args, **kw
                 f"   => CAPACIDAD RESISTENTE REDUCIDA TOTAL (R) = {r['R_comp_ton']:.1f} TONELADAS\n\n"
                 f"D. REVISIÓN A TENSIÓN / EXTRACCIÓN (NTC CDMX 3.6.3.2):\n"
                 f"   - Fricción reducida a tensión (castigo 0.80/0.60): Cf_tens = {r['Cf_tens_ton']:.1f} t (Punta Cp = 0.0 t)\n"
-                f"   - Peso propio neto del concreto (descontando subpresión bajo NAF): W = {r['W_concreto_ton']:.1f} t\n"
-                f"   - Ecuación: Rt = Cf_tens + W = {r['Cf_tens_ton']:.1f} t + {r['W_concreto_ton']:.1f} t\n"
+                f"   - Peso propio neto del concreto (descontando subpresión bajo NAF): W = {r['W_ton']:.1f} t\n"
+                f"   - Ecuación: Rt = Cf_tens + W = {r['Cf_tens_ton']:.1f} t + {r['W_ton']:.1f} t\n"
                 f"   => CAPACIDAD RESISTENTE A TENSIÓN (Rt) = {r['R_tens_ton']:.1f} TONELADAS\n"
                 f"   => Acero Longitudinal Mínimo Requerido (As = Rt / (0.90 * fy)) = {r['As_tensin_cm2']:.1f} cm²\n"
                 f"      (Considerando acero de refuerzo con fy = 4,200 kg/cm² y FR = 0.90)\n\n"
                 f"E. RIGIDEZ GLOBAL E INTERACCIÓN SUELO-ESTRUCTURA:\n"
-                f"   - Módulo de balasto lateral promedio ponderado en fuste: kh_prom = {r['kh_prom_t_m3']:.1f} t/m³\n"
+                f"   - Módulo de balasto lateral promedio ponderado en fuste: kh_prom = {r['kh_t_m3']:.1f} t/m³\n"
                 f"   - Rigidez lateral distribuida promedio: Kh_lineal = {r['Kh_lineal_t_m']:.1f} t/m\n"
                 f"   - Rigidez Axial Vertical en Cabeza (Resorte Point Spring para software):\n"
                 f"     Kv = {r['Kv_cabeza_t_cm']:.2f} t/cm ({r['Kv_cabeza_t_cm']*100:.0f} t/m)\n\n"
@@ -514,7 +315,7 @@ def generar_memoria_calculo_pdf(df_tramos, matrices, p_proy, p_elem, *args, **kw
             fig.text(0.08, 0.84, texto_caso, va='top', ha='left', fontsize=8.2, family='monospace')
             pdf.savefig(fig); plt.close(); contador += 1
 
-            # --- HOJA 2 DEL CASO: TABLA DE BALASTO METRO A METRO (1 PÁGINA) ---
+            # --- HOJA 2: TABLA DE BALASTO ---
             fig = plt.figure(figsize=(8.5, 11))
             n_m = int(math.ceil(r['L']))
             crear_encabezado_memoria(fig, f"BALASTO Y RESORTES METRO A METRO (1 a {n_m} m)", contador, total_paginas, p_proy, p_elem, p_sondeo, p_fecha)
@@ -529,45 +330,25 @@ def generar_memoria_calculo_pdf(df_tramos, matrices, p_proy, p_elem, *args, **kw
             ax_tab_kh = fig.add_axes([0.08, 0.14, 0.84, 0.67])
             ax_tab_kh.axis('off')
             
-            h_kh = ["Prof. z (m)", "SUCS", "Comportamiento", "kh (t/m³)", "Kh lineal (t/m)", "kv (t/m³)", "Kv lineal (t/m)"]
-            d_kh = []
-            
-            for z_i in range(1, n_m + 1):
-                z_flt = min(float(z_i), r['L'])
-                e_match = None
-                for e_item in r['desglose_estratos']:
-                    if e_item['zt'] < z_flt <= e_item['zb'] or (e_item['zt'] == 0 and z_flt == 0):
-                        e_match = e_item
-                        break
-                if e_match is None: e_match = r['desglose_estratos'][-1]
-                    
-                kh_v = e_match['kh_local']
-                kh_lin = kh_v * r['D']
-                if e_match['tipo'] == 'Roca': kv_v = kh_v * 1.0
-                elif e_match['tipo'] == 'Friccionante': kv_v = kh_v * 0.85
-                else: kv_v = kh_v * 1.2
-                kv_lin = kv_v * r['D']
-                
-                d_kh.append([
-                    f"-{z_flt:.2f} m", str(e_match['sucs']), str(e_match['tipo']),
-                    f"{kh_v:.1f}", f"{kh_lin:.1f}", f"{kv_v:.1f}", f"{kv_lin:.1f}"
-                ])
+            df_balasto = cimentaciones_profundas.obtener_tabla_balasto_metro_a_metro(df_tramos, naf_m, r['D'], r['L'])
+            h_kh = df_balasto.columns.tolist()
+            d_kh = df_balasto.values.tolist()
                 
             t_kh = ax_tab_kh.table(cellText=[h_kh] + d_kh, loc='center', cellLoc='center',
-                                   colWidths=[0.16, 0.10, 0.18, 0.14, 0.14, 0.14, 0.14])
+                                   colWidths=[0.15, 0.08, 0.15, 0.08, 0.13, 0.13, 0.14, 0.14])
             t_kh.auto_set_font_size(False)
             t_kh.set_fontsize(7.2 if len(d_kh) > 25 else 7.5)
             t_kh.scale(1, 1.15 if len(d_kh) > 25 else 1.3)
             
-            for j in range(7):
+            for j in range(len(h_kh)):
                 t_kh[0, j].set_facecolor('navy'); t_kh[0, j].set_text_props(color='white', weight='bold')
             for r_idx in range(1, len(d_kh) + 1):
                 if r_idx % 2 == 0:
-                    for c_idx in range(7): t_kh[r_idx, c_idx].set_facecolor('#f4f4f4')
+                    for c_idx in range(len(h_kh)): t_kh[r_idx, c_idx].set_facecolor('#f4f4f4')
                     
             nota_b = (
                 f"NOTA PARA EL MODELO ESTRUCTURAL:\n"
-                f"Módulo de Balasto Promedio en Fuste: kh_prom = {r['kh_prom_t_m3']:.1f} t/m³ (Kh_prom = {r['Kh_lineal_t_m']:.1f} t/m).\n"
+                f"Módulo de Balasto Promedio en Fuste: kh_prom = {r['kh_t_m3']:.1f} t/m³ (Kh_prom = {r['Kh_lineal_t_m']:.1f} t/m).\n"
                 f"Se recomienda asignar resortes puntuales en los nudos del fuste cada metro empleando las columnas 'Kh lineal' y 'Kv lineal'."
             )
             fig.text(0.08, 0.08, nota_b, va='top', ha='left', fontsize=7.5, family='monospace')
