@@ -336,7 +336,7 @@ def generar_memoria_calculo_pdf(df_tramos, matrices, p_proy, p_elem, *args, **kw
             d_kh = df_balasto.values.tolist()
                 
             t_kh = ax_tab_kh.table(cellText=[h_kh] + d_kh, loc='center', cellLoc='center',
-                                   colWidths=[0.16, 0.10, 0.18, 0.14, 0.14, 0.14, 0.14])
+                                   colWidths=[0.16, 0.08, 0.16, 0.08, 0.13, 0.13, 0.13, 0.13])
             t_kh.auto_set_font_size(False)
             t_kh.set_fontsize(7.2 if len(d_kh) > 25 else 7.5)
             t_kh.scale(1, 1.15 if len(d_kh) > 25 else 1.3)

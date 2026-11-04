@@ -145,7 +145,6 @@ def procesar_sondeo_completo(xls_path_o_bytes):
             n_campo = 50.0 if tipo == 'Roca' else 10.0
             
         n_corr = n_campo
-        # Corrección por dilatancia bajo NAF en arenas finas sumergidas
         if (tipo == 'Friccionante') and (naf is not None and p_med > naf) and n_corr > 15:
             n_corr = 15.0 + 0.5 * (n_corr - 15.0)
             
@@ -318,7 +317,7 @@ def evaluar_pila(df_tramos, naf_m, diametro_m, longitud_m, tipo_elemento="Pila",
         kv_base_ton_m3 = (Es_base / (d_punta * (1.0 - 0.30**2))) / 9.81
         detalles_punta = f"Arena (N60_punta={n60_punta:.1f})"
         norma_punta = "NTC CDMX 3.6.2.3.2.4.2 (SPT)"
-    else: # Cohesivo con factor Fre y Nc* = 9.0
+    else:
         cu_p = estrato_p['Cu_lab'] if (pd.notna(estrato_p.get('Cu_lab')) and estrato_p['Cu_lab'] > 0) else (factor_cu_spt * estrato_p['N60'])
         fre = (d_punta + 1.0) / (2.0 * d_punta + 1.0) if d_punta > 0.5 else 1.0
         fr_p = 0.35
@@ -330,11 +329,8 @@ def evaluar_pila(df_tramos, naf_m, diametro_m, longitud_m, tipo_elemento="Pila",
         detalles_punta = f"Limo/Arcilla (cu={cu_p:.1f} kPa, Nc*=9, Fre={fre:.3f})"
         norma_punta = "NTC Puebla / CDMX (Cohesivo)"
 
-    vol_fuste = (np.pi * (diametro_m**2) / 4.0) * (longitud_m - (h_campana_m if con_campana else 0.0))
-    vol_campana = ((np.pi * h_campana_m / 12.0) * (diametro_m**2 + diametro_m * d_punta + d_punta**2)) if con_campana else 0.0
-    vol_total = vol_fuste + vol_campana
-    
-    # Afectación del NAF en peso propio de la pila (Tensión / Extracción)
+    vol_total = ap * longitud_m
+    gamma_concreto = 24.0
     if naf_m is not None and naf_m < longitud_m:
         h_seco = min(naf_m, longitud_m)
         h_sum = max(0.0, longitud_m - naf_m)
@@ -355,7 +351,7 @@ def evaluar_pila(df_tramos, naf_m, diametro_m, longitud_m, tipo_elemento="Pila",
     Kv_cabeza_ton_m = 1.0 / (flex_fuste + flex_base)
     Kv_cabeza_ton_cm = Kv_cabeza_ton_m / 100.0
     
-    # Retornamos el diccionario completo con todos los campos y alias necesarios
+    # Retorna todas las claves y alias necesarios
     return {
         'Diametro_m': diametro_m,
         'Longitud_m': longitud_m,
