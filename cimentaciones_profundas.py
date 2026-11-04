@@ -188,7 +188,7 @@ def evaluar_pila(df_tramos, naf_m, diametro_m, longitud_m, tipo_elemento="Pila",
                  qu_roca_conservador=15000.0):
     """
     Evalúa la capacidad de carga vertical a compresión y tensión según NTC-CDMX 2023:
-    1. Roca: Mecánica de rocas (3.6.2.3.5) con ICR/RQD y qu conservador si no hay ensaye.
+    1. Roca: Mecánica de rocas (3.6.2.3.5) con ICR/RQD y qu conservador si no hay ensaye destructivo.
     2. Suelos Friccionantes: Fricción empírica SPT (3.6.2.3.2.3), fui <= 200 kPa, FR=0.50.
     3. Suelos Cohesivos: Método Alfa a partir de Su (cu = 6*N60 o laboratorio), fui <= 200 kPa, FR=0.70.
        Punta en cohesivos con Nc*=9.0 y factor Fre = (B+1)/(2B+1).
@@ -228,7 +228,6 @@ def evaluar_pila(df_tramos, naf_m, diametro_m, longitud_m, tipo_elemento="Pila",
         long_real = min(tramo['Prof_fin'], longitud_m) - tramo['Prof_ini']
         if long_real <= 0: continue
             
-        # Consideración de NAF en esfuerzos verticales efectivos
         p_med = tramo['P_med']
         bajo_naf = (naf_m is not None and p_med > naf_m)
         gamma_eff = (tramo['Gamma'] - gamma_w) if bajo_naf else tramo['Gamma']
@@ -319,7 +318,7 @@ def evaluar_pila(df_tramos, naf_m, diametro_m, longitud_m, tipo_elemento="Pila",
         kv_base_ton_m3 = (Es_base / (d_punta * (1.0 - 0.30**2))) / 9.81
         detalles_punta = f"Arena (N60_punta={n60_punta:.1f})"
         norma_punta = "NTC CDMX 3.6.2.3.2.4.2 (SPT)"
-    else:
+    else: # Cohesivo con factor Fre y Nc* = 9.0
         cu_p = estrato_p['Cu_lab'] if (pd.notna(estrato_p.get('Cu_lab')) and estrato_p['Cu_lab'] > 0) else (factor_cu_spt * estrato_p['N60'])
         fre = (d_punta + 1.0) / (2.0 * d_punta + 1.0) if d_punta > 0.5 else 1.0
         fr_p = 0.35
@@ -356,6 +355,7 @@ def evaluar_pila(df_tramos, naf_m, diametro_m, longitud_m, tipo_elemento="Pila",
     Kv_cabeza_ton_m = 1.0 / (flex_fuste + flex_base)
     Kv_cabeza_ton_cm = Kv_cabeza_ton_m / 100.0
     
+    # Retornamos el diccionario completo con todos los campos y alias necesarios
     return {
         'Diametro_m': diametro_m,
         'Longitud_m': longitud_m,
