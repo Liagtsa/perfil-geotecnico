@@ -128,8 +128,7 @@ def generar_memoria_calculo_pdf(df_tramos, matrices, p_proy, p_elem, *args, **kw
     diametros = matriz_comp.columns.tolist()
     longitudes = matriz_comp.index.tolist()
     
-    # Paginación inteligente del registro estratigráfico:
-    # Hasta 42 filas caben holgadamente por página sin tocar el encabezado.
+    # Paginación inteligente del registro estratigráfico (hasta 42 renglones)
     n_total_estratos = len(df_tramos)
     num_pags_estratos = max(1, int(math.ceil(n_total_estratos / 42.0)))
     filas_por_pag = int(math.ceil(n_total_estratos / float(num_pags_estratos)))
@@ -145,7 +144,7 @@ def generar_memoria_calculo_pdf(df_tramos, matrices, p_proy, p_elem, *args, **kw
     h_campana_m = matrices.get('h_campana_m', 1.0)
     naf_m = matrices.get('naf_m', None)
     
-    # Desglose representativo de pilas (8 casos estándar)
+    # Casos de diseño estándar representativos (8 casos)
     casos_analisis = []
     for d in diametros:
         casos_analisis.append((d, longitudes[-1]))
@@ -160,7 +159,7 @@ def generar_memoria_calculo_pdf(df_tramos, matrices, p_proy, p_elem, *args, **kw
         )
         desgloses.append(desglose)
     
-    # Estructura ejecutiva de 22 páginas exactas
+    # 22 páginas exactas (1 metodología + 2 estratigrafía + 1 esquema + 16 desgloses + 1 gráficas + 1 resumen)
     total_paginas = 1 + num_pags_estratos + 1 + (len(desgloses) * 2) + 2
     
     with PdfPages(pdf_buffer) as pdf:
@@ -180,7 +179,7 @@ def generar_memoria_calculo_pdf(df_tramos, matrices, p_proy, p_elem, *args, **kw
             "   - Corrección por Energía y Equipo: N60 = N' * C_E * C_B * C_S * C_R (con tope conservador N60 <= 50)\n"
             "   - Confinamiento efectivo: (N1)60 = N60 * min(sqrt(100 / sigma'_v), 1.7).\n\n"
             "B. CAPACIDAD EN CIMENTACIONES PROFUNDAS (Pilas Perforadas)\n"
-            "   - Suelos Friccionantes (NTC CDMX 3.6.2.3.2.3): fui = min(2.5 * N60, 200 kPa); FR_fuste = 0.50.\n"
+            "   - Suelos Friccionantes (NTC CDMX 3.6.2.3.2.3): fui = min(3.0 * N60, 200 kPa); FR_fuste = 0.50.\n"
             "     Punta: pu = 57.5 * N60_punta (<= 75 golpes); FR_punta = 0.35.\n"
             "   - Suelos Cohesivos (Método Alfa NTC 3.6.2.3.2.1): fui = min(alpha * cu, 200 kPa); FR_fuste = 0.70.\n"
             "     Punta: Cp = (cu * Nc* * FR + pv) * Ap * Fre; Nc* = 9.0; FR = 0.35; Fre = (B+1)/(2B+1).\n"

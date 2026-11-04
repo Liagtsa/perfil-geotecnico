@@ -145,6 +145,7 @@ def procesar_sondeo_completo(xls_path_o_bytes):
             n_campo = 50.0 if tipo == 'Roca' else 10.0
             
         n_corr = n_campo
+        # Corrección por dilatancia bajo NAF en arenas finas sumergidas
         if (tipo == 'Friccionante') and (naf is not None and p_med > naf) and n_corr > 15:
             n_corr = 15.0 + 0.5 * (n_corr - 15.0)
             
@@ -227,6 +228,7 @@ def evaluar_pila(df_tramos, naf_m, diametro_m, longitud_m, tipo_elemento="Pila",
         long_real = min(tramo['Prof_fin'], longitud_m) - tramo['Prof_ini']
         if long_real <= 0: continue
             
+        # Consideración de NAF en esfuerzos verticales efectivos
         p_med = tramo['P_med']
         bajo_naf = (naf_m is not None and p_med > naf_m)
         gamma_eff = (tramo['Gamma'] - gamma_w) if bajo_naf else tramo['Gamma']
@@ -252,7 +254,8 @@ def evaluar_pila(df_tramos, naf_m, diametro_m, longitud_m, tipo_elemento="Pila",
             kh_local = (Em_kPa / (diametro_m * (1.0 - 0.25**2))) / 9.81
             norma = "NTC CDMX 3.6.2.3.5 (Roca)"
         elif tipo == 'Friccionante':
-            fui = min(2.5 * n60, 200.0)
+            # NTC CDMX 3.6.2.3.2.3: fui = min(3.0 * N60, 200 kPa)
+            fui = min(3.0 * n60, 200.0)
             fr_f = 0.50
             tramo_comp = fr_f * (pp * fui * long_fuste_efectiva)
             tramo_tens = fr_f * (pp * (fui * f_red_fricc) * long_fuste_efectiva)
@@ -262,8 +265,8 @@ def evaluar_pila(df_tramos, naf_m, diametro_m, longitud_m, tipo_elemento="Pila",
         else: # Cohesivo / Limo con Método Alfa
             cu = tramo['Cu_lab'] if (pd.notna(tramo.get('Cu_lab')) and tramo['Cu_lab'] > 0) else (factor_cu_spt * n60)
             alpha = max(0.35, min(1.0, 0.55 * np.sqrt(100.0 / max(cu, 25.0))))
-            fui = min(alpha * cu, 200.0)
-            fr_f = 0.70
+            fui = min(alpha * cu, 200.0) # Con tope normativo de 200 kPa
+            fr_f = 0.70 # NTC Suelos Cohesivos
             tramo_comp = fr_f * (pp * fui * long_fuste_efectiva)
             tramo_tens = fr_f * (pp * (fui * f_red_cohes) * long_fuste_efectiva)
             kh_local = (67.0 * cu / diametro_m) / 9.81
@@ -317,7 +320,7 @@ def evaluar_pila(df_tramos, naf_m, diametro_m, longitud_m, tipo_elemento="Pila",
         kv_base_ton_m3 = (Es_base / (d_punta * (1.0 - 0.30**2))) / 9.81
         detalles_punta = f"Arena (N60_punta={n60_punta:.1f})"
         norma_punta = "NTC CDMX 3.6.2.3.2.4.2 (SPT)"
-    else:
+    else: # Cohesivo con factor Fre y Nc* = 9.0
         cu_p = estrato_p['Cu_lab'] if (pd.notna(estrato_p.get('Cu_lab')) and estrato_p['Cu_lab'] > 0) else (factor_cu_spt * estrato_p['N60'])
         fre = (d_punta + 1.0) / (2.0 * d_punta + 1.0) if d_punta > 0.5 else 1.0
         fr_p = 0.35
@@ -351,7 +354,7 @@ def evaluar_pila(df_tramos, naf_m, diametro_m, longitud_m, tipo_elemento="Pila",
     Kv_cabeza_ton_m = 1.0 / (flex_fuste + flex_base)
     Kv_cabeza_ton_cm = Kv_cabeza_ton_m / 100.0
     
-    # Retorna todas las claves y alias necesarios
+    # Retorna todas las claves y alias necesarios para evitar KeyError
     return {
         'Diametro_m': diametro_m,
         'Longitud_m': longitud_m,
