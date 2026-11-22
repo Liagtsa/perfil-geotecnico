@@ -12,13 +12,18 @@ import os
 import textwrap
 from PIL import Image
 
-# Importación limpia de los módulos especializados de cimentaciones profundas y memoria
+# Importación limpia de los módulos especializados de cimentaciones profundas, superficiales y memorias
 from cimentaciones_profundas import (
     procesar_sondeo_completo,
     generar_matrices_parametricas,
     obtener_tabla_balasto_metro_a_metro
 )
 from generador_memoria_pdf import generar_memoria_calculo_pdf
+from cimentaciones_superficiales import (
+    procesar_datos_superficiales,
+    generar_analisis_parametrico_zapatas
+)
+from generador_memoria_zapatas import generar_memoria_zapatas_pdf
 
 # ==========================================
 # 0. CONFIGURACIÓN DE PÁGINA E ICONO
@@ -406,11 +411,12 @@ def generar_pdf_desde_excel(archivo_excel):
 # 3. INTERFAZ GRÁFICA PRINCIPAL (CON PESTAÑAS)
 # ==========================================
 st.title("🏗️ Portal de Ingeniería Geotécnica")
-st.caption("Generación de Perfiles Estratigráficos (ISO 710-2) y Diseño de Cimentaciones Profundas (NTC CDMX / Puebla)")
+st.caption("Perfiles Estratigráficos (ISO 710-2), Cimentaciones Profundas y Superficiales (NTC-CDMX 2023 / NTC-Puebla)")
 
-tab_perfil, tab_cimentacion = st.tabs([
+tab_perfil, tab_cimentacion, tab_zapatas = st.tabs([
     "📄 Perfil Estratigráfico ISO 710-2",
-    "🏗️ Capacidad de Pilas (Compresión / Tensión)"
+    "🏗️ Cimentaciones Profundas (Pilas)",
+    "📐 Zapatas Superficiales (NTC CDMX / Puebla)"
 ])
 
 with tab_perfil:
@@ -474,7 +480,6 @@ with tab_cimentacion:
                 l_max = st.number_input("Profundidad Máxima (m)", value=cfg['l_max'], min_value=l_min, step=0.5)
                 paso_l = st.number_input("Paso de Profundidad (m)", value=cfg['l_paso'], min_value=0.5, step=0.5)
 
-            # Opciones de Geometría y Restricciones de Pilas Preperforadas
             st.markdown("#### Configuración de Acampanamiento (Campana)")
             chk_campana = st.checkbox("¿Considerar base acampanada en la punta?", value=False)
             if chk_campana:
@@ -489,7 +494,6 @@ with tab_cimentacion:
 
             st.info("ℹ️ **Restricciones aplicadas automáticamente:** Se desprecian los primeros 1.50 m de fuste y 1.0·D antes de la punta/campana (criterio FHWA-NHI-10-016 / NTC-CDMX).")
 
-            # Generación de listas de evaluación
             if cfg['diametros_lista'] and cfg['diametros_lista'] != 'nan':
                 diametros = [float(x.strip()) for x in cfg['diametros_lista'].split(',') if x.strip()]
             else:
@@ -537,7 +541,6 @@ with tab_cimentacion:
                     st.caption("Constante del resorte vertical de la pila para apoyos en ETABS / SAP2000.")
                     st.dataframe(matrices['matriz_Kv'].style.format("{:.2f} t/cm"))
 
-                # ----- SECCIÓN 6: MÓDULOS DE REACCIÓN METRO A METRO -----
                 st.markdown("---")
                 st.markdown("### 6. Módulos de Reacción Horizontal y Vertical Metro a Metro")
                 st.caption("Valores discretizados por metro para la asignación de resortes puntuales laterales (kh, Kh) y verticales (kv, Kv) en nudos de software estructural (ETABS, SAP2000, Midas, STAAD).")
@@ -569,7 +572,6 @@ with tab_cimentacion:
                     mime="text/csv"
                 )
 
-                # ----- GENERACIÓN Y DESCARGA DEL REPORTE PDF COMPLETO -----
                 st.markdown("---")
                 st.subheader("Generar Memoria de Cálculo en PDF")
                 st.caption("Memoria geotécnica formal con desglose estrato por estrato, balasto metro a metro y matrices de diseño.")
@@ -596,3 +598,162 @@ with tab_cimentacion:
                 )
         except Exception as e:
             st.error(f"Error al analizar el sondeo: {e}")
+
+# ==========================================
+# 4. PESTAÑA 3: CIMENTACIONES SUPERFICIALES (ZAPATAS)
+# ==========================================
+with tab_zapatas:
+    st.header("Cálculo de Cimentaciones Superficiales — Zapatas Aisladas y Corridas")
+    st.caption("Evaluación dual bajo NTC-CDMX 2023 y NTC-Puebla, seleccionando automáticamente la condición más desfavorable.")
+
+    col_met, col_info = st.columns([1, 2])
+    with col_met:
+        metodo_exp_zap = st.radio(
+            "Método de Exploración Geotécnica:",
+            options=["SPT", "PCA"],
+            format_func=lambda x: "SPT (Ensayo de Penetración Estándar)" if x == "SPT" else "PCA (Pozo a Cielo Abierto — Muestras Inalteradas)",
+            key="metodo_zap_radio"
+        )
+    with col_info:
+        if metodo_exp_zap == "SPT":
+            st.info("**Modo SPT:** Deduce $\\phi$, $c_u$ y $E_s$ mediante correlaciones corregidas ($C_N$, $N_{60}$, $(N_1)_{60}$) ponderadas en el bulbo de presiones ($D_f$ a $D_f + 1.5B$).")
+        else:
+            st.info("**Modo PCA (Muestras Inalteradas):** Emplea directamente los parámetros de laboratorio ($c$, $\\phi$, $\\gamma$) registrados en `Humedades` (o en una hoja opcional `PCA`). Puedes ajustar los valores en la tabla inferior.")
+
+    archivo_zap = st.file_uploader("Carga el archivo Datos_Sondeo.xlsx", type=["xlsx"], key="uploader_zapatas")
+
+    if archivo_zap is not None:
+        try:
+            df_tramos_z, naf_z, cfg_z = procesar_datos_superficiales(archivo_zap, metodo_exploracion=metodo_exp_zap)
+            st.success(f"Archivo procesado ({metodo_exp_zap}): {len(df_tramos_z)} estratos detectados. NAF: {naf_z} m")
+
+            st.markdown("#### Parámetros Geotécnicos por Estrato (Editables antes de calcular)")
+            cols_edit_z = ['Prof_ini', 'Prof_fin', 'SUCS', 'Tipo', 'Gamma', 'c_kPa', 'phi_deg', 'Es_kPa']
+            if metodo_exp_zap == "SPT":
+                cols_edit_z.insert(5, 'N60')
+                cols_edit_z.insert(6, 'N1_60')
+
+            df_tramos_z_edit = st.data_editor(
+                df_tramos_z[cols_edit_z],
+                width="stretch",
+                hide_index=True,
+                key="editor_estratos_zapatas"
+            )
+
+            col_z1, col_z2, col_z3 = st.columns(3)
+            with col_z1:
+                st.subheader("Desplante Df (m)")
+                z_df_min = st.number_input("Df Mínimo (m)", value=cfg_z['df_min'], min_value=0.50, step=0.20, key="z_df_min")
+                z_df_max = st.number_input("Df Máximo (m)", value=cfg_z['df_max'], min_value=z_df_min, step=0.20, key="z_df_max")
+                z_df_paso = st.number_input("Paso Df (m)", value=cfg_z['df_paso'], min_value=0.10, step=0.10, key="z_df_paso")
+
+            with col_z2:
+                st.subheader("Zapatas Corridas B (m)")
+                z_bc_min = st.number_input("Ancho Corrida Mín. (m)", value=cfg_z['bc_min'], min_value=0.30, step=0.10, key="z_bc_min")
+                z_bc_max = st.number_input("Ancho Corrida Máx. (m)", value=cfg_z['bc_max'], min_value=z_bc_min, step=0.10, key="z_bc_max")
+                z_bc_paso = st.number_input("Paso Corrida (m)", value=cfg_z['bc_paso'], min_value=0.10, step=0.10, key="z_bc_paso")
+
+            with col_z3:
+                st.subheader("Zapatas Aisladas B (m)")
+                z_ba_min = st.number_input("Ancho Aislada Mín. (m)", value=cfg_z['ba_min'], min_value=0.60, step=0.20, key="z_ba_min")
+                z_ba_max = st.number_input("Ancho Aislada Máx. (m)", value=cfg_z['ba_max'], min_value=z_ba_min, step=0.20, key="z_ba_max")
+                z_ba_paso = st.number_input("Paso Aislada (m)", value=cfg_z['ba_paso'], min_value=0.10, step=0.10, key="z_ba_paso")
+
+            col_p1, col_p2, col_p3, col_p4 = st.columns(4)
+            with col_p1:
+                rel_lb = st.number_input("Relación L / B (Aislada)", value=1.0, min_value=1.0, max_value=5.0, step=0.25, key="z_rel_lb")
+            with col_p2:
+                fs_zap = st.number_input("Factor Seguridad (FS)", value=3.0, min_value=1.5, max_value=5.0, step=0.5, key="z_fs")
+            with col_p3:
+                nu_zap = st.number_input("Relación de Poisson (ν)", value=0.30, min_value=0.15, max_value=0.49, step=0.05, key="z_nu")
+            with col_p4:
+                fr_cdmx_zap = st.selectbox("FR NTC-CDMX 2023", options=[0.65, 0.35], index=0, key="z_fr_cdmx")
+
+            df_list_z = np.arange(z_df_min, z_df_max + z_df_paso / 2, z_df_paso).round(2).tolist()
+            bc_list_z = np.arange(z_bc_min, z_bc_max + z_bc_paso / 2, z_bc_paso).round(2).tolist()
+            ba_list_z = np.arange(z_ba_min, z_ba_max + z_ba_paso / 2, z_ba_paso).round(2).tolist()
+
+            if st.button("Calcular Zapatas (NTC-CDMX 2023 vs NTC-Puebla)", type="primary", key="btn_calc_zapatas"):
+                analisis_z = generar_analisis_parametrico_zapatas(
+                    df_tramos_z_edit,
+                    naf_z,
+                    df_list=df_list_z,
+                    b_corridas=bc_list_z,
+                    b_aisladas=ba_list_z,
+                    rel_LB_aislada=rel_lb,
+                    metodo_exploracion=metodo_exp_zap,
+                    FS=fs_zap,
+                    nu=nu_zap,
+                    fr_cdmx_override=fr_cdmx_zap
+                )
+                st.session_state['analisis_zapatas_calc'] = analisis_z
+
+            if 'analisis_zapatas_calc' in st.session_state:
+                az = st.session_state['analisis_zapatas_calc']
+                df_corr_v = az['df_corridas']
+                df_ais_v = az['df_aisladas']
+
+                st.markdown("---")
+                st.subheader("1. Comparativa Normativa y Capacidad Gobernante (Más Desfavorable)")
+
+                cols_vista_z = ['Df', 'B', 'L', 'r_cdmx_kgcm2', 'r_puebla_kgcm2', 'norma_gobernante', 'r_gob_kgcm2', 'q_adm_kgcm2', 'q_adm_tonm2', 'Se_cm', 'ks_ton_m3']
+
+                st.markdown("#### A. Zapatas Corridas ($L \\gg B$)")
+                st.dataframe(
+                    df_corr_v[cols_vista_z].style.format({
+                        'Df': '{:.2f} m', 'B': '{:.2f} m', 'L': '{:.2f} m',
+                        'r_cdmx_kgcm2': '{:.2f}', 'r_puebla_kgcm2': '{:.2f}',
+                        'r_gob_kgcm2': '{:.2f} kg/cm²', 'q_adm_kgcm2': '{:.2f} kg/cm²',
+                        'q_adm_tonm2': '{:.1f} t/m²', 'Se_cm': '{:.3f} cm', 'ks_ton_m3': '{:.0f} t/m³'
+                    }),
+                    width="stretch",
+                    hide_index=True
+                )
+
+                st.markdown("#### B. Zapatas Aisladas ($B \\times L$)")
+                st.dataframe(
+                    df_ais_v[cols_vista_z].style.format({
+                        'Df': '{:.2f} m', 'B': '{:.2f} m', 'L': '{:.2f} m',
+                        'r_cdmx_kgcm2': '{:.2f}', 'r_puebla_kgcm2': '{:.2f}',
+                        'r_gob_kgcm2': '{:.2f} kg/cm²', 'q_adm_kgcm2': '{:.2f} kg/cm²',
+                        'q_adm_tonm2': '{:.1f} t/m²', 'Se_cm': '{:.3f} cm', 'ks_ton_m3': '{:.0f} t/m³'
+                    }),
+                    width="stretch",
+                    hide_index=True
+                )
+
+                col_m1, col_m2 = st.columns(2)
+                with col_m1:
+                    st.markdown("#### Matriz $q_{adm}$ Gobernante — Corridas (kg/cm²)")
+                    st.dataframe(az['mat_corr_qadm_kgcm2'].style.format("{:.2f} kg/cm²").highlight_max(axis=0, color="#d4edda"))
+                with col_m2:
+                    st.markdown("#### Matriz $q_{adm}$ Gobernante — Aisladas (kg/cm²)")
+                    st.dataframe(az['mat_ais_qadm_kgcm2'].style.format("{:.2f} kg/cm²").highlight_max(axis=0, color="#d4edda"))
+
+                st.markdown("---")
+                st.subheader("Generar Memoria de Cálculo de Zapatas en PDF")
+                try:
+                    archivo_zap.seek(0)
+                    df_proy_z = pd.read_excel(archivo_zap, sheet_name='Proyecto').set_index('Parametro')['Valor'].to_dict()
+                    nm_proy_z = str(df_proy_z.get('Proyecto', 'ESTUDIO DE MECÁNICA DE SUELOS'))
+                    nm_elem_z = str(df_proy_z.get('Elemento', 'CIMENTACIONES SUPERFICIALES'))
+                    nm_sondeo_z = f"{df_proy_z.get('Sondeo', 'EXPLORACIÓN')} ({metodo_exp_zap})"
+                    nm_fecha_z = str(df_proy_z.get('Fecha', ''))
+                except Exception:
+                    nm_proy_z, nm_elem_z, nm_sondeo_z, nm_fecha_z = "PROYECTO", "CIMENTACIONES SUPERFICIALES", f"EXPLORACIÓN ({metodo_exp_zap})", ""
+
+                with st.spinner("Compilando memoria ejecutiva de zapatas en PDF..."):
+                    pdf_zap_bytes = generar_memoria_zapatas_pdf(
+                        df_tramos_z_edit, az, nm_proy_z, nm_elem_z, nm_sondeo_z, nm_fecha_z
+                    )
+
+                st.download_button(
+                    label="📄 Descargar Memoria de Cálculo Zapatas PDF",
+                    data=pdf_zap_bytes,
+                    file_name=f"Memoria_Zapatas_Superficiales_{metodo_exp_zap}.pdf",
+                    mime="application/pdf",
+                    type="primary",
+                    key="btn_descarga_pdf_zapatas"
+                )
+        except Exception as e:
+            st.error(f"Error al procesar zapatas superficiales: {e}")
