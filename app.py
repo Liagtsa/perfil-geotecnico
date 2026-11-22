@@ -1,6 +1,8 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from matplotlib.backends.backend_pdf import PdfPages
@@ -10,16 +12,7 @@ import os
 import textwrap
 from PIL import Image
 
-# ==========================================================
-# RECARGA EN CALIENTE DE MÓDULOS (EVITA CACHÉ OBSOLETO EN RAM)
-# ==========================================================
-import importlib
-import cimentaciones_profundas
-import generador_memoria_pdf
-
-importlib.reload(cimentaciones_profundas)
-importlib.reload(generador_memoria_pdf)
-
+# Importación limpia de los módulos especializados de cimentaciones profundas y memoria
 from cimentaciones_profundas import (
     procesar_sondeo_completo,
     generar_matrices_parametricas,
@@ -27,9 +20,9 @@ from cimentaciones_profundas import (
 )
 from generador_memoria_pdf import generar_memoria_calculo_pdf
 
-# ==========================================================
+# ==========================================
 # 0. CONFIGURACIÓN DE PÁGINA E ICONO
-# ==========================================================
+# ==========================================
 ruta_logo = "logo_empresa.png"
 if os.path.exists(ruta_logo):
     try:
@@ -45,9 +38,9 @@ st.set_page_config(
     layout="wide"
 )
 
-# ==========================================================
+# ==========================================
 # 1. SISTEMA DE LOGIN (Autenticación Segura)
-# ==========================================================
+# ==========================================
 if 'autenticado' not in st.session_state:
     st.session_state['autenticado'] = False
 
@@ -78,9 +71,9 @@ if not st.session_state['autenticado']:
                 st.error("Usuario o contraseña incorrectos.")
     st.stop()
 
-# ==========================================================
+# ==========================================
 # 2. MOTOR GEOTÉCNICO Y PERFIL ISO 710-2
-# ==========================================================
+# ==========================================
 PROF_POR_PAGINA = 25.0
 
 def generar_plantilla_excel():
@@ -566,7 +559,7 @@ with tab_cimentacion:
                     )
 
                 df_balasto_view = obtener_tabla_balasto_metro_a_metro(df_tramos, naf_val, sel_d, sel_l)
-                st.dataframe(df_balasto_view, use_container_width=True, hide_index=True)
+                st.dataframe(df_balasto_view, width="stretch", hide_index=True)
 
                 csv_balasto = df_balasto_view.to_csv(index=False).encode('utf-8')
                 st.download_button(
