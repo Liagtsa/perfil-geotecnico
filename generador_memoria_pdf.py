@@ -104,7 +104,9 @@ def dibujar_esquemas(fig, D_val, L_val, naf_m):
 # 3. FUNCIÓN PRINCIPAL GENERADORA DE LA MEMORIA
 # ==========================================================
 def generar_memoria_calculo_pdf(df_tramos, matrices, p_proy, p_elem, *args, **kwargs):
+    import importlib
     import cimentaciones_profundas
+    importlib.reload(cimentaciones_profundas)
     
     if len(args) >= 2:
         p_sondeo = str(args[0])
