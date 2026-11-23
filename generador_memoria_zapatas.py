@@ -84,9 +84,9 @@ def dibujar_esquema_zapata(fig, Df_rep, B_rep, naf_m, metodo_exp, ubicacion_lbl,
     ax1.text(0, -Df_rep - 0.52, f"Ancho B = {B_rep:.2f} m", fontsize=7.5, weight='bold', ha='center')
     ax1.axis('off')
 
-    ax2.set_title("Interacción Suelo-Cimentación (NTC-CDMX 2023)\n(Falla por Corte vs. Servicio por Deformación)", fontsize=9.2, weight='bold')
+    ax2.set_title("Interacción Suelo-Cimentación (NTC-CDMX 2023)\n(Ecuaciones Separadas Cohesivo/Friccionante + Servicio)", fontsize=9.0, weight='bold')
     ax2.set_xlim(-3.0, 3.0)
-    ax2.set_ylim(-6.2, 2.0)
+    ax2.set_ylim(-6.4, 2.0)
 
     ax2.annotate('', xy=(0, 0.2), xytext=(0, 1.5), arrowprops=dict(arrowstyle='->', color='darkred', lw=2.2))
     ax2.text(0.25, 1.0, "Carga Recomendada q_rec", fontsize=8.0, color='darkred', weight='bold')
@@ -100,8 +100,8 @@ def dibujar_esquema_zapata(fig, Df_rep, B_rep, naf_m, metodo_exp, ubicacion_lbl,
     ax2.axhline(-2.4, color='brown', lw=1.8)
     ax2.text(0, -3.0, "Módulo de Balasto Vertical ks (t/m³)", ha='center', fontsize=8.5, color='navy', weight='bold')
     ax2.text(0, -3.8, "Deformación Elástica: Se = [q_neta · B · (1 - nu²) · If] / Es_sec", ha='center', fontsize=7.8, color='darkgreen')
-    ax2.text(0, -5.0, f"Criterio Gobernante (NTC-CDMX 2023):\nq_rec = min(r_CDMX, q_adm_corte, q_adm_def)\nControl Servicio: Se <= {margen_pct:.0f}% Se_máx",
-             ha='center', fontsize=7.6, bbox=dict(boxstyle='round,pad=0.35', facecolor='#fff3cd', edgecolor='orange'))
+    ax2.text(0, -5.1, f"Criterio Gobernante (NTC-CDMX 2023 Num. 3.5.1):\nq_rec = min(r_CDMX, q_adm_corte, q_adm_def)\nControl Servicio: Se <= {margen_pct:.0f}% Se_máx",
+             ha='center', fontsize=7.5, bbox=dict(boxstyle='round,pad=0.35', facecolor='#fff3cd', edgecolor='orange'))
     ax2.axis('off')
 
 
@@ -125,6 +125,7 @@ def generar_memoria_zapatas_pdf(df_tramos, analisis_zap, p_proy, p_elem, *args, 
     df_corr = analisis_zap['df_corridas']
     df_ais = analisis_zap['df_aisladas']
     metodo_exp = analisis_zap.get('metodo_exploracion', 'SPT')
+    criterio_suelo = analisis_zap.get('criterio_suelo_ntc', 'Automatico')
     FS_val = analisis_zap.get('FS', 3.0)
     nu_val = analisis_zap.get('nu', 0.30)
     fr_val = analisis_zap.get('fr_cdmx', 0.65)
@@ -150,11 +151,26 @@ def generar_memoria_zapatas_pdf(df_tramos, analisis_zap, p_proy, p_elem, *args, 
                 f"gamma_ef={r['gamma_cuna']:.2f} kN/m³, Es_sec={r['Es_kpa']:.0f} kPa"
             )
 
+        has_coh_val = 'q_corte_coh_kgcm2' in r and pd.notna(r['q_corte_coh_kgcm2'])
+        has_fricc_val = 'q_corte_fricc_kgcm2' in r and pd.notna(r['q_corte_fricc_kgcm2'])
+        if has_coh_val and has_fricc_val:
+            comp_ecuaciones = (
+                f"   - Revisión NTC-CDMX 3.5.1 (Ecuaciones Separadas — Criterio: {criterio_suelo}):\n"
+                f"     * Hipótesis Puramente Cohesiva (phi=0):     r_coh={r['r_coh_kgcm2']:.2f} | q_corte={r['q_corte_coh_kgcm2']:.2f} kg/cm²\n"
+                f"     * Hipótesis Puramente Friccionante (c=0):   r_fricc={r['r_fricc_kgcm2']:.2f} | q_corte={r['q_corte_fricc_kgcm2']:.2f} kg/cm²\n"
+                f"     => Modelo Adoptado: {r['modelo_suelo_aplicado']} | q_corte = {r['q_adm_corte_kgcm2']:.2f} kg/cm² (Se_corte = {r['Se_corte_mm']:.1f} mm)\n"
+            )
+        else:
+            mod_lbl = r.get('modelo_suelo_aplicado', 'NTC-CDMX 3.5.1')
+            comp_ecuaciones = (
+                f"   - Modelo Normativo NTC-CDMX 3.5.1 ({mod_lbl}, FR={r['fr_cdmx']:.2f}): "
+                f"r_CDMX = {r['r_cdmx_kgcm2']:.2f} kg/cm² | q_corte (FS={r['FS']:.1f}) = {r['q_adm_corte_kgcm2']:.2f} kg/cm² (Se_corte = {r['Se_corte_mm']:.1f} mm)\n"
+            )
+
         return (
             f" > ZAPATA {r['tipo_zapata'].upper()} | B = {r['B']:.2f} m | Df = {r['Df']:.2f} m | pv = {r['pv_kpa']:.2f} kPa\n"
             f"{param_linea}\n"
-            f"   - Estado Límite Falla NTC-CDMX (FR={r['fr_cdmx']:.2f}): Nc*={r['nc_star_cdmx']:.2f}, Nq*={r['nq_star_cdmx']:.2f}, Ng*={r['ng_star_cdmx']:.2f} => r_CDMX = {r['r_cdmx_kgcm2']:.2f} kg/cm²\n"
-            f"   - Capacidad Admisible por Corte (FS={r['FS']:.1f}): q_corte = {r['q_adm_corte_kgcm2']:.2f} kg/cm² (generaría Se_corte = {r['Se_corte_mm']:.1f} mm)\n"
+            f"{comp_ecuaciones}"
             f"   - Control Servicio ({r['margen_se_pct']:.0f}% de Se_máx = {r['Se_obj_mm']:.1f} mm): q_def = {r['q_adm_def_kgcm2']:.2f} kg/cm²\n"
             f"   => CAPACIDAD RECOMENDADA [{r['criterio_gobernante']}]: q_rec = {r['q_rec_kgcm2']:.2f} kg/cm² ({r['q_rec_tonm2']:.1f} t/m²)\n"
             f"   => DEFORMACIÓN ESPERADA REAL: Se = {r['Se_final_mm']:.1f} mm ({r['pct_se_max']:.0f}% de Se_máx) | BALASTO: ks = {r['ks_ton_m3']:.0f} t/m³ ({r['ks_kg_cm3']:.2f} kg/cm³)\n\n"
@@ -163,11 +179,11 @@ def generar_memoria_zapatas_pdf(df_tramos, analisis_zap, p_proy, p_elem, *args, 
     textos_corr = [_bloque_texto_caso(row) for _, row in df_corr.iterrows()]
     textos_ais = [_bloque_texto_caso(row) for _, row in df_ais.iterrows()]
 
-    def _paginar(lista_txt, por_pag=5):
+    def _paginar(lista_txt, por_pag=4):
         return ["".join(lista_txt[i:i + por_pag]) for i in range(0, len(lista_txt), por_pag)]
 
-    pags_corr = _paginar(textos_corr, 5)
-    pags_ais = _paginar(textos_ais, 5)
+    pags_corr = _paginar(textos_corr, 4)
+    pags_ais = _paginar(textos_ais, 4)
 
     total_paginas = 1 + 1 + 1 + len(pags_corr) + len(pags_ais) + 1 + 1
 
@@ -181,7 +197,7 @@ def generar_memoria_zapatas_pdf(df_tramos, analisis_zap, p_proy, p_elem, *args, 
         crear_encabezado_memoria_zapata(fig, "METODOLOGÍA Y CRITERIOS NORMATIVOS (NTC-CDMX 2023)", contador, total_paginas, p_proy, p_elem, p_sondeo, p_fecha)
         texto_pg1 = (
             "1. METODOLOGÍA DE CÁLCULO DE CIMENTACIONES SUPERFICIALES\n"
-            "   (NORMA TÉCNICA COMPLEMENTARIA NTC-CDMX 2023 — FALLA VS. SERVICIO)\n"
+            "   (NORMA TÉCNICA COMPLEMENTARIA NTC-CDMX 2023 — NUMERAL 3.5.1)\n"
             "====================================================================================\n\n"
             f"A. CARACTERIZACIÓN GEOTÉCNICA MEDIANTE {metodo_exp.upper()}\n"
             "   - Modo SPT: Corrección por sobrecarga Cn = min(2.0, sqrt(100 / sigma'_v)) [Liao & Whitman],\n"
@@ -190,16 +206,15 @@ def generar_memoria_zapatas_pdf(df_tramos, analisis_zap, p_proy, p_elem, *args, 
             "   - Modo PCA (Pozo a Cielo Abierto): Emplea directamente los parámetros de resistencia al esfuerzo\n"
             "     cortante (c, phi) y peso volumétrico (gamma) de muestras inalteradas ensayadas en laboratorio.\n"
             "   - Módulo Elástico Secante (Es_sec): Se emplea directamente el módulo secante obtenido del\n"
-            "     ensaye axial/triaxial de laboratorio cuando está disponible, o se estima empíricamente.\n"
-            "   - Ponderación en Bulbo de Presiones: Promedio ponderado desde z = Df hasta Df + 1.5·B (aislada)\n"
-            "     o Df + 2.0·B (corrida), considerando subpresión por Nivel Freático (NAF) en pv y gamma_efec.\n\n"
-            "B. ESTADO LÍMITE DE FALLA — NTC-CDMX 2023 (Numeral 3.5.1 y Tabla 3.6.1)\n"
-            "   - Suelos Cohesivos (phi = 0): r_CDMX = cu * Nc* * FR + pv\n"
+            "     ensaye axial/triaxial de laboratorio cuando está disponible, o se estima empíricamente.\n\n"
+            "B. SEPARACIÓN NORMATIVA ESTRICTA DE ECUACIONES — NTC-CDMX 2023 (Numeral 3.5.1)\n"
+            "   La norma separa el análisis en dos ecuaciones independientes (sin sumar c y phi):\n"
+            "   - Ecuación (a) Suelos Cohesivos (phi = 0, esfuerzos totales): r = cu * Nc* * FR + pv_total\n"
             "     donde Nc* = 5.14 * (1 + 0.25*(Df/B) + 0.25*(B/L)), con Df/B <= 2.0 y B/L <= 1.0.\n"
-            "   - Suelos Friccionantes / c-phi: r_CDMX = [c*Nc* + pv*(Nq* - 1) + 0.5*gamma*B*Ngamma*] * FR + pv\n"
-            "     con Nq = exp(pi*tan(phi))*tan^2(45 + phi/2), Ngamma = 2*(Nq + 1)*tan(phi) [Vesic],\n"
-            "     fq = 1 + (B/L)*tan(phi), fgamma = 1 - 0.4*(B/L).\n"
-            f"   - Factor de Resistencia (FR): {fr_val:.2f} [{ubicacion_lbl}] | Factor Seguridad Corte FS = {FS_val:.1f}.\n\n"
+            "   - Ecuación (b) Suelos Friccionantes (c = 0, esfuerzos efectivos): r = [pv_ef*(Nq* - 1) + 0.5*gamma*B*Ng*] * FR + pv_ef\n"
+            "     con Nq = exp(pi*tan(phi))*tan^2(45 + phi/2), Ng = 2*(Nq + 1)*tan(phi) [Vesic],\n"
+            "     fq = 1 + (B/L)*tan(phi), fg = 1 - 0.4*(B/L).\n"
+            f"   - Criterio Aplicado: {criterio_suelo} | FR = {fr_val:.2f} [{ubicacion_lbl}] | FS Corte = {FS_val:.1f}.\n\n"
             "C. ESTADO LÍMITE DE SERVICIO Y CAPACIDAD DE CARGA RECOMENDADA (q_rec)\n"
             f"   - Se evalúa la deformación elástica que produciría la carga por corte: Se_corte = q_neta·B·(1-nu²)·If / Es_sec.\n"
             f"   - Para evitar asentamientos excesivos, se fija una deformación objetivo al {margen_pct:.0f}% del límite máximo\n"
@@ -207,7 +222,7 @@ def generar_memoria_zapatas_pdf(df_tramos, analisis_zap, p_proy, p_elem, *args, 
             "       Se_obj = (Margen %) * Se_máx   =>   q_adm_def = [Se_obj * Es_sec / (B * (1 - nu²) * If)] + pv\n"
             "   - Capacidad Recomendada Gobernante: q_rec = min(r_CDMX, q_adm_corte, q_adm_def)."
         )
-        fig.text(0.08, 0.84, texto_pg1, va='top', ha='left', fontsize=8.0, family='monospace')
+        fig.text(0.08, 0.84, texto_pg1, va='top', ha='left', fontsize=7.9, family='monospace')
         pdf.savefig(fig); plt.close(); contador += 1
 
         # --------------------------------------------------------
@@ -225,7 +240,7 @@ def generar_memoria_zapatas_pdf(df_tramos, analisis_zap, p_proy, p_elem, *args, 
         ax_t2.axis('off')
 
         df_sub = df_tramos.head(38)
-        headers_t2 = ["Prof. (m)", "SUCS", "Tipo", "gamma\n(kN/m³)", "N60 /\n(N1)60", "c\n(kPa)", "phi\n(°)", "Es sec.\n(kPa)"]
+        headers_t2 = ["Prof. (m)", "SUCS", "Modelo Estrato", "gamma\n(kN/m³)", "N60 /\n(N1)60", "c\n(kPa)", "phi\n(°)", "Es sec.\n(kPa)"]
         filas_t2 = []
         for _, row in df_sub.iterrows():
             has_n60 = ('N60' in row) and pd.notna(row['N60'])
@@ -234,10 +249,13 @@ def generar_memoria_zapatas_pdf(df_tramos, analisis_zap, p_proy, p_elem, *args, 
                 spt_str = f"{row['N60']:.0f}/{n1_v:.0f}"
             else:
                 spt_str = "PCA"
+            tipo_lbl = str(row['Tipo'])
+            if tipo_lbl.startswith('Dual'):
+                tipo_lbl = "Dual (c vs phi)"
             filas_t2.append([
                 f"{row['Prof_ini']:.2f}-{row['Prof_fin']:.2f}",
                 str(row['SUCS']),
-                str(row['Tipo'])[:14],
+                tipo_lbl[:16],
                 f"{row['Gamma']:.2f}",
                 spt_str,
                 f"{row['c_kPa']:.1f}",
@@ -246,7 +264,7 @@ def generar_memoria_zapatas_pdf(df_tramos, analisis_zap, p_proy, p_elem, *args, 
             ])
 
         tab2 = ax_t2.table(cellText=[headers_t2] + filas_t2, loc='center', cellLoc='center',
-                           colWidths=[0.15, 0.09, 0.19, 0.11, 0.12, 0.10, 0.10, 0.14])
+                           colWidths=[0.14, 0.08, 0.21, 0.11, 0.12, 0.10, 0.10, 0.14])
         tab2.auto_set_font_size(False)
         tab2.set_fontsize(7.2 if len(filas_t2) > 25 else 8.0)
         tab2.scale(1, 1.15 if len(filas_t2) > 25 else 1.35)
@@ -272,17 +290,17 @@ def generar_memoria_zapatas_pdf(df_tramos, analisis_zap, p_proy, p_elem, *args, 
         texto_esq = (
             "CRITERIOS DE MODELADO GEOTÉCNICO Y ESTRUCTURAL (NTC-CDMX 2023):\n"
             "------------------------------------------------------------------------------------\n"
-            "1. Sobrecarga Efectiva de Desplante (pv):\n"
-            "   Integra el peso volumétrico de los estratos superiores hasta la cota -Df. Si el Nivel de Aguas\n"
-            "   Freáticas (NAF) se ubica por encima de Df, se aplica el peso volumétrico sumergido (gamma - 9.81).\n\n"
+            "1. Congruencia de Drenaje (Cohesivo vs. Friccionante):\n"
+            "   En cumplimiento con las NTC-CDMX 2023, no se superponen términos de cohesión no drenada y\n"
+            "   fricción efectiva. En suelos mixtos de laboratorio (c y phi), se evalúan ambas hipótesis\n"
+            "   independientes y se rige el diseño con la condición más desfavorable.\n\n"
             "2. Control de Deformaciones en Estado Límite de Servicio:\n"
-            "   En suelos con alta resistencia al corte, la carga admisible por falla (q_corte) puede inducir\n"
-            "   asentamientos mayores a los tolerables. El sistema acota automáticamente la presión de trabajo\n"
-            f"   para que la deformación elástica esperada no supere el {margen_pct:.0f}% del límite admisible.\n\n"
+            "   La capacidad admisible por corte (q_corte) se contrasta contra la deformación elástica;\n"
+            f"   la presión recomendada q_rec se acota para no exceder el {margen_pct:.0f}% de Se_máx.\n\n"
             "3. Resortes Verticales (Módulo de Balasto ks) para SAP2000 / ETABS / SAFE:\n"
             "   Se reporta ks = q_neta / Se en t/m³ y kg/cm³ para modelado de losas y zapatas sobre suelo elástico."
         )
-        fig.text(0.08, 0.36, texto_esq, va='top', ha='left', fontsize=8.3, family='monospace')
+        fig.text(0.08, 0.36, texto_esq, va='top', ha='left', fontsize=8.2, family='monospace')
         pdf.savefig(fig); plt.close(); contador += 1
 
         # --------------------------------------------------------
@@ -296,7 +314,7 @@ def generar_memoria_zapatas_pdf(df_tramos, analisis_zap, p_proy, p_elem, *args, 
                 f"3. MEMORIA DE CÁLCULO DETALLADA — ZAPATAS CORRIDAS (Parte {idx_p + 1} de {len(pags_corr)})\n"
                 f"====================================================================================\n\n"
             )
-            fig.text(0.08, 0.84, tit_c + pag_txt, va='top', ha='left', fontsize=7.6, family='monospace')
+            fig.text(0.08, 0.84, tit_c + pag_txt, va='top', ha='left', fontsize=7.5, family='monospace')
             pdf.savefig(fig); plt.close(); contador += 1
 
         # --------------------------------------------------------
@@ -310,7 +328,7 @@ def generar_memoria_zapatas_pdf(df_tramos, analisis_zap, p_proy, p_elem, *args, 
                 f"4. MEMORIA DE CÁLCULO DETALLADA — ZAPATAS AISLADAS (Parte {idx_p + 1} de {len(pags_ais)})\n"
                 f"====================================================================================\n\n"
             )
-            fig.text(0.08, 0.84, tit_a + pag_txt, va='top', ha='left', fontsize=7.6, family='monospace')
+            fig.text(0.08, 0.84, tit_a + pag_txt, va='top', ha='left', fontsize=7.5, family='monospace')
             pdf.savefig(fig); plt.close(); contador += 1
 
         # --------------------------------------------------------
@@ -373,36 +391,41 @@ def generar_memoria_zapatas_pdf(df_tramos, analisis_zap, p_proy, p_elem, *args, 
         crear_encabezado_memoria_zapata(fig, "RESUMEN DE DISEÑO (FALLA VS. DEFORMACIÓN) Y DICTAMEN",
                                         contador, total_paginas, p_proy, p_elem, p_sondeo, p_fecha)
 
-        cols_res = ["Df\n(m)", "B\n(m)", "q_corte\n(kg/cm²)", "Se_corte\n(mm)", "q_def\n(kg/cm²)", "Criterio\nGobernante", "q_rec\n(kg/cm²)", "Se_rec\n(mm)", "ks\n(t/m³)"]
+        cols_res = ["Df\n(m)", "B\n(m)", "Modelo\nSuelo", "q_corte\n(kg/cm²)", "Se_corte\n(mm)", "q_def\n(kg/cm²)", "Criterio\nGobernante", "q_rec\n(kg/cm²)", "Se_rec\n(mm)", "ks\n(t/m³)"]
 
-        fig.text(0.06, 0.84, f"A. RESUMEN DE DISEÑO — ZAPATAS CORRIDAS [NTC-CDMX 2023 | {ubicacion_lbl}]", fontsize=8.3, weight='bold', color='navy')
-        ax_m1 = fig.add_axes([0.06, 0.53, 0.88, 0.29]); ax_m1.axis('off')
+        def _cortar_modelo(m_txt):
+            return "Cohesivo" if "Cohesiv" in str(m_txt) else "Friccionante"
+
+        fig.text(0.05, 0.84, f"A. RESUMEN DE DISEÑO — ZAPATAS CORRIDAS [NTC-CDMX 2023 | {ubicacion_lbl}]", fontsize=8.2, weight='bold', color='navy')
+        ax_m1 = fig.add_axes([0.05, 0.53, 0.90, 0.29]); ax_m1.axis('off')
         if not df_corr.empty:
             rows_c = [[
-                f"{r['Df']:.2f}", f"{r['B']:.2f}", f"{r['q_adm_corte_kgcm2']:.2f}", f"{r['Se_corte_mm']:.1f}",
+                f"{r['Df']:.2f}", f"{r['B']:.2f}", _cortar_modelo(r.get('modelo_suelo_aplicado', '')),
+                f"{r['q_adm_corte_kgcm2']:.2f}", f"{r['Se_corte_mm']:.1f}",
                 f"{r['q_adm_def_kgcm2']:.2f}", r['criterio_gobernante'], f"{r['q_rec_kgcm2']:.2f}",
                 f"{r['Se_final_mm']:.1f}", f"{r['ks_ton_m3']:.0f}"
             ] for _, r in df_corr.head(14).iterrows()]
             t1 = ax_m1.table(cellText=[cols_res] + rows_c, loc='center', cellLoc='center',
-                             colWidths=[0.07, 0.07, 0.10, 0.10, 0.10, 0.22, 0.10, 0.10, 0.14])
-            t1.auto_set_font_size(False); t1.set_fontsize(7.0); t1.scale(1, 1.18)
+                             colWidths=[0.06, 0.06, 0.11, 0.09, 0.09, 0.09, 0.20, 0.09, 0.09, 0.12])
+            t1.auto_set_font_size(False); t1.set_fontsize(6.8); t1.scale(1, 1.18)
             for j in range(len(cols_res)):
                 t1[0, j].set_facecolor('navy'); t1[0, j].set_text_props(color='white', weight='bold')
             for ri in range(1, len(rows_c) + 1):
                 if ri % 2 == 0:
                     for ci in range(len(cols_res)): t1[ri, ci].set_facecolor('#f4f4f4')
 
-        fig.text(0.06, 0.49, f"B. RESUMEN DE DISEÑO — ZAPATAS AISLADAS [NTC-CDMX 2023 | {ubicacion_lbl}]", fontsize=8.3, weight='bold', color='#7030a0')
-        ax_m2 = fig.add_axes([0.06, 0.18, 0.88, 0.29]); ax_m2.axis('off')
+        fig.text(0.05, 0.49, f"B. RESUMEN DE DISEÑO — ZAPATAS AISLADAS [NTC-CDMX 2023 | {ubicacion_lbl}]", fontsize=8.2, weight='bold', color='#7030a0')
+        ax_m2 = fig.add_axes([0.05, 0.18, 0.90, 0.29]); ax_m2.axis('off')
         if not df_ais.empty:
             rows_a = [[
-                f"{r['Df']:.2f}", f"{r['B']:.2f}", f"{r['q_adm_corte_kgcm2']:.2f}", f"{r['Se_corte_mm']:.1f}",
+                f"{r['Df']:.2f}", f"{r['B']:.2f}", _cortar_modelo(r.get('modelo_suelo_aplicado', '')),
+                f"{r['q_adm_corte_kgcm2']:.2f}", f"{r['Se_corte_mm']:.1f}",
                 f"{r['q_adm_def_kgcm2']:.2f}", r['criterio_gobernante'], f"{r['q_rec_kgcm2']:.2f}",
                 f"{r['Se_final_mm']:.1f}", f"{r['ks_ton_m3']:.0f}"
             ] for _, r in df_ais.head(14).iterrows()]
             t2 = ax_m2.table(cellText=[cols_res] + rows_a, loc='center', cellLoc='center',
-                             colWidths=[0.07, 0.07, 0.10, 0.10, 0.10, 0.22, 0.10, 0.10, 0.14])
-            t2.auto_set_font_size(False); t2.set_fontsize(7.0); t2.scale(1, 1.18)
+                             colWidths=[0.06, 0.06, 0.11, 0.09, 0.09, 0.09, 0.20, 0.09, 0.09, 0.12])
+            t2.auto_set_font_size(False); t2.set_fontsize(6.8); t2.scale(1, 1.18)
             for j in range(len(cols_res)):
                 t2[0, j].set_facecolor('#7030a0'); t2[0, j].set_text_props(color='white', weight='bold')
             for ri in range(1, len(rows_a) + 1):
@@ -415,12 +438,12 @@ def generar_memoria_zapatas_pdf(df_tramos, analisis_zap, p_proy, p_elem, *args, 
 
         nota_dictamen = (
             f"DICTAMEN GEOTÉCNICO Y RECOMENDACIONES DE DISEÑO (NTC-CDMX 2023 | {ubicacion_lbl}):\n"
-            f"1. Se revisaron los Estados Límite de Falla (FR={fr_val:.2f}, FS={FS_val:.1f}) y de Servicio ({margen_pct:.0f}% de Se_máx).\n"
+            f"1. Se evaluaron las ecuaciones separadas de las NTC-CDMX 2023 (Num. 3.5.1) y el control de servicio ({margen_pct:.0f}% de Se_máx).\n"
             f"2. Las capacidades recomendadas gobernantes (q_rec) oscilan entre {q_min_g:.2f} y {q_max_g:.2f} kg/cm², acotando\n"
             f"   la deformación elástica esperada a un máximo de {se_max_g:.1f} mm dentro del margen normativo.\n"
             f"3. Se recomienda desplante sobre terreno natural firme libre de rellenos, con plantilla de concreto f'c = 100 kg/cm²."
         )
-        fig.text(0.06, 0.04, nota_dictamen, fontsize=7.5, style='italic', weight='bold', color='darkgreen')
+        fig.text(0.05, 0.04, nota_dictamen, fontsize=7.4, style='italic', weight='bold', color='darkgreen')
 
         pdf.savefig(fig); plt.close()
 

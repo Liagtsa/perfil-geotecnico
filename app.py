@@ -613,7 +613,7 @@ with tab_cimentacion:
 # ==========================================
 with tab_zapatas:
     st.header("Cálculo de Cimentaciones Superficiales — NTC-CDMX 2023")
-    st.caption("Revisión combinada de Estado Límite de Falla (esfuerzo cortante) vs. Estado Límite de Servicio (deformación elástica acotada al margen normativo).")
+    st.caption("Revisión combinada de Estado Límite de Falla (ecuaciones separadas Cohesivo vs. Friccionante) y Estado Límite de Servicio (deformación elástica acotada al margen normativo).")
 
     col_met, col_info = st.columns([1, 2])
     with col_met:
@@ -625,9 +625,9 @@ with tab_zapatas:
         )
     with col_info:
         if metodo_exp_zap == "SPT":
-            st.info("**Modo SPT (NTC-CDMX 2023):** Deduce $\\phi$, $c_u$ mediante correlaciones corregidas ($C_N$, $N_{60}$, $(N_1)_{60}$). Si capturas el **Módulo Elástico Secante ($E_{s,\\text{sec}}$)** del ensaye axial, se usará directamente para el control de deformaciones.")
+            st.info("**Modo SPT (NTC-CDMX 2023):** Deduce $\phi$, $c_u$ mediante correlaciones corregidas ($C_N$, $N_{60}$, $(N_1)_{60}$). Si capturas el **Módulo Elástico Secante ($E_{s,\text{sec}}$)** del ensaye axial, se usará directamente para el control de deformaciones.")
         else:
-            st.info("**Modo PCA (Muestras Inalteradas):** Emplea los parámetros de laboratorio ($c$, $\\phi$, $\\gamma$) y el **Módulo Elástico Secante ($E_{s,\\text{sec}}$)** del ensaye axial. Puedes capturar o editar los valores en la tabla inferior.")
+            st.info("**Modo PCA (Muestras Inalteradas):** Emplea los parámetros de laboratorio ($c$, $\phi$, $\gamma$) y el **Módulo Elástico Secante ($E_{s,\text{sec}}$)** del ensaye axial. En suelos con ambos parámetros ($c$ y $\phi$), evalúa las ecuaciones cohesiva y friccionante por separado conforme a NTC-CDMX 3.5.1.")
 
     archivo_zap = st.file_uploader("Carga el archivo Datos_Sondeo.xlsx", type=["xlsx"], key="uploader_zapatas")
 
@@ -638,7 +638,7 @@ with tab_zapatas:
 
             col_tb_tit, col_tb_unit = st.columns([2, 1])
             with col_tb_tit:
-                st.markdown("#### Parámetros Geotécnicos por Estrato (Introduce aquí el Módulo Elástico Secante Axial $E_{s,\\text{sec}}$)")
+                st.markdown("#### Parámetros Geotécnicos por Estrato (Introduce aquí el Módulo Elástico Secante Axial $E_{s,\text{sec}}$)")
             with col_tb_unit:
                 unidad_es_sec = st.selectbox(
                     "Unidad de captura para Es Secante:",
@@ -666,8 +666,9 @@ with tab_zapatas:
                     "Prof_fin": st.column_config.NumberColumn("Prof. Fin (m)", format="%.2f", disabled=True),
                     "SUCS": st.column_config.TextColumn("SUCS"),
                     "Tipo": st.column_config.SelectboxColumn(
-                        "Comportamiento",
-                        options=["Cohesivo", "Friccionante", "Cohesivo-Friccionante", "Roca"]
+                        "Comportamiento NTC-CDMX",
+                        options=["Cohesivo", "Friccionante", "Dual (Cohesivo vs. Friccionante)", "Roca"],
+                        help="NTC-CDMX 2023 Num. 3.5.1: En suelos con c y phi ('Dual'), evalúa ambas ecuaciones por separado y toma la más desfavorable."
                     ),
                     "Gamma": st.column_config.NumberColumn("γ (kN/m³)", min_value=10.0, max_value=28.0, step=0.1, format="%.2f"),
                     "c_kPa": st.column_config.NumberColumn("Cohesión c (kPa)", min_value=0.0, step=1.0, format="%.2f"),
@@ -710,11 +711,30 @@ with tab_zapatas:
                 z_ba_max = st.number_input("Ancho Aislada Máx. (m)", value=cfg_z['ba_max'], min_value=z_ba_min, step=0.20, key="z_ba_max")
                 z_ba_paso = st.number_input("Paso Aislada (m)", value=cfg_z['ba_paso'], min_value=0.10, step=0.10, key="z_ba_paso")
 
-            st.markdown("#### Parámetros Normativos (NTC-CDMX 2023) y Control de Deformaciones")
-            col_p1, col_p2, col_p3, col_p4 = st.columns(4)
-            with col_p1:
+            st.markdown("#### Parámetros Normativos (NTC-CDMX 2023 Num. 3.5.1) y Control de Deformaciones")
+            col_criterio_s, col_ubic_s = st.columns(2)
+            with col_criterio_s:
+                criterio_suelo_ui = st.selectbox(
+                    "Ecuación de Capacidad de Carga (NTC-CDMX 3.5.1):",
+                    options=[
+                        "Automático (Evalúa Cohesivo vs. Friccionante por separado y elige el menor)",
+                        "Puramente Cohesivo (φ = 0, esfuerzos totales)",
+                        "Puramente Friccionante (c = 0, esfuerzos efectivos)"
+                    ],
+                    index=0,
+                    help="Las NTC-CDMX 2023 separan estrictamente el cálculo en dos ecuaciones independientes sin sumar c y φ en la misma fórmula.",
+                    key="z_criterio_suelo_ntc"
+                )
+                if "Puramente Cohesivo" in criterio_suelo_ui:
+                    criterio_suelo_val = "Puramente Cohesivo"
+                elif "Puramente Friccionante" in criterio_suelo_ui:
+                    criterio_suelo_val = "Puramente Friccionante"
+                else:
+                    criterio_suelo_val = "Automatico"
+
+            with col_ubic_s:
                 ubicacion_zap = st.selectbox(
-                    "Ubicación / Factor FR (Tabla 3.6.1):",
+                    "Ubicación / Factor de Resistencia FR (Tabla 3.6.1):",
                     options=["Interior / Central (FR = 0.65)", "Colindante / Lindero (FR = 0.35)"],
                     index=1 if cfg_z.get('es_colindante', False) else 0,
                     help="NTC-CDMX 2023 Tabla 3.6.1: FR = 0.65 para zapatas interiores; FR = 0.35 para zapatas colindantes.",
@@ -723,6 +743,7 @@ with tab_zapatas:
                 es_colindante_zap = "0.35" in ubicacion_zap
                 fr_cdmx_zap = 0.35 if es_colindante_zap else 0.65
 
+            col_p2, col_p3, col_p4 = st.columns(3)
             with col_p2:
                 rel_lb = st.number_input("Relación L / B (Aislada)", value=1.0, min_value=1.0, max_value=5.0, step=0.25, key="z_rel_lb")
             with col_p3:
@@ -774,6 +795,7 @@ with tab_zapatas:
                     nu=nu_zap,
                     fr_cdmx=fr_cdmx_zap,
                     es_colindante=es_colindante_zap,
+                    criterio_suelo_ntc=criterio_suelo_val,
                     se_max_corrida_cm=se_max_corr_mm / 10.0,
                     se_max_aislada_cm=se_max_ais_mm / 10.0,
                     factor_margen_se=margen_def_pct / 100.0
@@ -795,7 +817,7 @@ with tab_zapatas:
                 )
 
                 cols_vista_z = [
-                    'Df', 'B', 'r_cdmx_kgcm2', 'q_adm_corte_kgcm2', 'Se_corte_mm',
+                    'Df', 'B', 'modelo_suelo_aplicado', 'r_cdmx_kgcm2', 'q_adm_corte_kgcm2', 'Se_corte_mm',
                     'q_adm_def_kgcm2', 'criterio_gobernante', 'q_rec_kgcm2', 'q_rec_tonm2',
                     'Se_final_mm', 'ks_ton_m3'
                 ]
@@ -813,14 +835,14 @@ with tab_zapatas:
                     'ks_ton_m3': '{:.0f} t/m³'
                 }
 
-                st.markdown("#### A. Zapatas Corridas ($L \\gg B$)")
+                st.markdown("#### A. Zapatas Corridas ($L \gg B$)")
                 st.dataframe(
                     df_corr_v[cols_vista_z].style.format(formato_tabla_z),
                     width="stretch",
                     hide_index=True
                 )
 
-                st.markdown("#### B. Zapatas Aisladas ($B \\times L$)")
+                st.markdown("#### B. Zapatas Aisladas ($B \times L$)")
                 st.dataframe(
                     df_ais_v[cols_vista_z].style.format(formato_tabla_z),
                     width="stretch",
@@ -829,10 +851,10 @@ with tab_zapatas:
 
                 col_m1, col_m2 = st.columns(2)
                 with col_m1:
-                    st.markdown("#### Matriz $q_{\\text{rec}}$ Recomendada — Corridas (kg/cm²)")
+                    st.markdown("#### Matriz $q_{\text{rec}}$ Recomendada — Corridas (kg/cm²)")
                     st.dataframe(az['mat_corr_qrec_kgcm2'].style.format("{:.2f} kg/cm²").highlight_max(axis=0, color="#d4edda"))
                 with col_m2:
-                    st.markdown("#### Matriz $q_{\\text{rec}}$ Recomendada — Aisladas (kg/cm²)")
+                    st.markdown("#### Matriz $q_{\text{rec}}$ Recomendada — Aisladas (kg/cm²)")
                     st.dataframe(az['mat_ais_qrec_kgcm2'].style.format("{:.2f} kg/cm²").highlight_max(axis=0, color="#d4edda"))
 
                 col_s_m1, col_s_m2 = st.columns(2)
