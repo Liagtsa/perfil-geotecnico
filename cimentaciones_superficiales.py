@@ -1,6 +1,6 @@
 # ==============================================================================
 # MODULO: cimentaciones_superficiales.py
-# VERSION: 1.0.1-NTC2023-NTCPUEBLA-SPT-PCA
+# VERSION: 1.0.2-NTC2023-NTCPUEBLA-SPT-PCA-SAFEFLOAT
 # REVISION NORMATIVA: NTC-CDMX 2023 (Cap. 3.5) & NTC-PUEBLA (Cimentaciones)
 # ==============================================================================
 
@@ -10,35 +10,54 @@ import numpy as np
 import pandas as pd
 
 
+def _a_float(val, default=np.nan):
+    """Convierte cualquier celda de Excel (incluyendo espacios ' ', guiones o NaN) a float seguro."""
+    if val is None or pd.isna(val):
+        return default
+    if isinstance(val, (int, float, np.number)):
+        fval = float(val)
+        return default if math.isnan(fval) else fval
+    s = str(val).strip()
+    if s == '' or s.lower() in ('nan', 'none', 'null', '-', 's/d', 'n/a'):
+        return default
+    try:
+        fval = float(s.replace(',', '.'))
+        return default if math.isnan(fval) else fval
+    except ValueError:
+        return default
+
+
 def _convertir_spt_campo(valor_raw):
     """Convierte lecturas numericas y de rechazo SPT en golpes de diseno (tope 50)."""
-    if pd.isna(valor_raw):
+    if valor_raw is None or pd.isna(valor_raw):
         return np.nan
-    if isinstance(valor_raw, (int, float)):
-        return min(float(valor_raw), 50.0) if valor_raw > 0 else np.nan
+    if isinstance(valor_raw, (int, float, np.number)):
+        fval = float(valor_raw)
+        return min(fval, 50.0) if fval > 0 else np.nan
 
     val_str = str(valor_raw).strip().upper()
-    if any(k in val_str for k in ['ABT', 'RECHAZO', 'NQ', 'PCA']):
-        return 50.0 if 'PCA' not in val_str else np.nan
+    if val_str == '' or val_str in ('NAN', 'NONE', '-', 'PCA', 'TS'):
+        return np.nan
+    if any(k in val_str for k in ['ABT', 'RECHAZO', 'NQ']):
+        return 50.0
 
     match = re.search(r'(\d+)\s*/\s*(\d+)', val_str)
     if match:
         return 50.0
 
-    try:
-        n_num = float(val_str)
-        return min(n_num, 50.0) if n_num > 0 else np.nan
-    except ValueError:
-        return np.nan
+    fval = _a_float(val_str, np.nan)
+    return min(fval, 50.0) if (pd.notna(fval) and fval > 0) else np.nan
 
 
 def _estimar_gamma_estrato(tipo, sucs, n60, w_pct=None, f_pct=None, bajo_naf=False):
     """Estima gamma (kN/m3) mediante relaciones de fases y compacidad/consistencia."""
     gamma_w = 9.81
+    n_ref_roca = _a_float(n60, 50.0)
     if tipo == 'Roca' or 'ROCA' in str(sucs).upper():
-        return round(21.0 + (min(n60 if pd.notna(n60) else 50.0, 50.0) / 50.0) * 3.5, 2)
+        return round(21.0 + (min(n_ref_roca, 50.0) / 50.0) * 3.5, 2)
 
-    f = float(f_pct) if (f_pct is not None and not pd.isna(f_pct)) else (10.0 if tipo == 'Friccionante' else 60.0)
+    default_f = 10.0 if tipo == 'Friccionante' else 60.0
+    f = _a_float(f_pct, default_f)
     if f < 12.0:
         gs = 2.65
     elif f <= 50.0:
@@ -47,13 +66,14 @@ def _estimar_gamma_estrato(tipo, sucs, n60, w_pct=None, f_pct=None, bajo_naf=Fal
         gs = 2.72 if 'CH' in str(sucs).upper() else 2.70
 
     gamma_fase = None
-    if w_pct is not None and not pd.isna(w_pct) and float(w_pct) > 0:
-        w = float(w_pct) / 100.0
-        sr = 1.00 if bajo_naf else min(0.85, 0.45 + 0.015 * float(w_pct))
+    w_val = _a_float(w_pct, np.nan)
+    if pd.notna(w_val) and w_val > 0:
+        w = w_val / 100.0
+        sr = 1.00 if bajo_naf else min(0.85, 0.45 + 0.015 * w_val)
         e = (w * gs) / sr
         gamma_fase = gamma_w * (gs * (1.0 + w)) / (1.0 + e)
 
-    n_ref = float(n60) if (n60 is not None and pd.notna(n60)) else 15.0
+    n_ref = _a_float(n60, 15.0)
     if tipo == 'Friccionante':
         delta_f = 0.5 if f > 20.0 else 0.0
         gamma_spt = 14.5 + 0.12 * min(n_ref, 50.0) - delta_f
@@ -76,46 +96,48 @@ def procesar_datos_superficiales(xls_path_o_bytes, metodo_exploracion="SPT"):
     (Pozo a Cielo Abierto con muestras inalteradas de laboratorio).
     """
     xls = pd.ExcelFile(xls_path_o_bytes)
-    df_proy = pd.read_excel(xls, 'Proyecto').set_index('Parametro')['Valor'].to_dict()
+    df_proy_raw = pd.read_excel(xls, 'Proyecto')
+    df_proy_raw['Parametro'] = df_proy_raw['Parametro'].astype(str).str.strip()
+    df_proy = df_proy_raw.set_index('Parametro')['Valor'].to_dict()
+
     df_hum = pd.read_excel(xls, 'Humedades')
     df_ind = pd.read_excel(xls, 'PruebasIndice')
 
-    hojas_excel = [h.upper() for h in xls.sheet_names]
+    hojas_excel = [h.strip().upper() for h in xls.sheet_names]
     if metodo_exploracion.upper() == "PCA" and any(h in hojas_excel for h in ['PCA', 'MUESTRAS_PCA']):
         nombre_hoja_pca = xls.sheet_names[hojas_excel.index('PCA' if 'PCA' in hojas_excel else 'MUESTRAS_PCA')]
         df_fuente = pd.read_excel(xls, nombre_hoja_pca)
     else:
         df_fuente = df_hum.copy()
 
-    def _get_num(key, default_val):
-        val = df_proy.get(key, default_val)
-        try:
-            fval = float(val)
-            return default_val if pd.isna(fval) else fval
-        except (ValueError, TypeError):
-            return default_val
+    # Limpieza de columnas numericas para evitar errores por espacios ' ' o celdas vacias
+    for col_num in ['Prof_ini', 'Prof_fin', 'W%', 'Gamma_kN_m3', 'Angulo_deg', 'Cohesion_kPa', 'Es_kPa']:
+        if col_num in df_fuente.columns:
+            df_fuente[col_num] = df_fuente[col_num].apply(lambda x: _a_float(x, np.nan))
+    df_fuente = df_fuente.dropna(subset=['Prof_ini', 'Prof_fin']).reset_index(drop=True)
 
-    try:
-        naf = float(df_proy.get('NAF', np.nan))
-        if pd.isna(naf):
-            naf = None
-    except (ValueError, TypeError):
-        naf = None
+    for col_ind in ['Prof_ini', 'Prof_fin', 'F%', 'LL', 'LP']:
+        if col_ind in df_ind.columns:
+            df_ind[col_ind] = df_ind[col_ind].apply(lambda x: _a_float(x, np.nan))
+    df_ind = df_ind.dropna(subset=['Prof_ini', 'Prof_fin']).reset_index(drop=True)
 
-    eficiencia = _get_num('Eficiencia_SPT', 60.0)
-    diam_barr = _get_num('Diametro_Barrena_mm', 100.0)
-    sin_liner = str(df_proy.get('Muestreador_Liner', 'CON_LINER')).upper() == 'SIN_LINER'
+    naf_raw = _a_float(df_proy.get('NAF', np.nan), np.nan)
+    naf = None if pd.isna(naf_raw) else naf_raw
+
+    eficiencia = _a_float(df_proy.get('Eficiencia_SPT', 60.0), 60.0)
+    diam_barr = _a_float(df_proy.get('Diametro_Barrena_mm', 100.0), 100.0)
+    sin_liner = str(df_proy.get('Muestreador_Liner', 'CON_LINER')).strip().upper() == 'SIN_LINER'
 
     config_zap = {
-        'df_min': _get_num('Zap_Df_Min_m', 1.0),
-        'df_max': _get_num('Zap_Df_Max_m', 2.2),
-        'df_paso': _get_num('Zap_Df_Paso_m', 0.2),
-        'bc_min': _get_num('Zap_Corrida_B_Min_m', 0.6),
-        'bc_max': _get_num('Zap_Corrida_B_Max_m', 1.2),
-        'bc_paso': _get_num('Zap_Corrida_B_Paso_m', 0.2),
-        'ba_min': _get_num('Zap_Aislada_B_Min_m', 1.2),
-        'ba_max': _get_num('Zap_Aislada_B_Max_m', 2.4),
-        'ba_paso': _get_num('Zap_Aislada_B_Paso_m', 0.3),
+        'df_min': _a_float(df_proy.get('Zap_Df_Min_m', 1.0), 1.0),
+        'df_max': _a_float(df_proy.get('Zap_Df_Max_m', 2.2), 2.2),
+        'df_paso': _a_float(df_proy.get('Zap_Df_Paso_m', 0.2), 0.2),
+        'bc_min': _a_float(df_proy.get('Zap_Corrida_B_Min_m', 0.6), 0.6),
+        'bc_max': _a_float(df_proy.get('Zap_Corrida_B_Max_m', 1.2), 1.2),
+        'bc_paso': _a_float(df_proy.get('Zap_Corrida_B_Paso_m', 0.2), 0.2),
+        'ba_min': _a_float(df_proy.get('Zap_Aislada_B_Min_m', 1.2), 1.2),
+        'ba_max': _a_float(df_proy.get('Zap_Aislada_B_Max_m', 2.4), 2.4),
+        'ba_paso': _a_float(df_proy.get('Zap_Aislada_B_Paso_m', 0.3), 0.3),
     }
 
     tramos = []
@@ -123,8 +145,8 @@ def procesar_datos_superficiales(xls_path_o_bytes, metodo_exploracion="SPT"):
     gamma_w = 9.81
 
     for _, row in df_fuente.iterrows():
-        p_ini = float(row['Prof_ini'])
-        p_fin = float(row['Prof_fin'])
+        p_ini = _a_float(row['Prof_ini'], 0.0)
+        p_fin = _a_float(row['Prof_fin'], p_ini + 0.5)
         espesor = max(0.01, p_fin - p_ini)
         p_med = (p_ini + p_fin) / 2.0
 
@@ -136,11 +158,14 @@ def procesar_datos_superficiales(xls_path_o_bytes, metodo_exploracion="SPT"):
         coincidencias = df_ind[(df_ind['Prof_ini'] <= p_med) & (df_ind['Prof_fin'] >= p_med)]
         if not coincidencias.empty:
             fila_ind = coincidencias.iloc[0]
-            sucs = str(fila_ind.get('SUCS', 'SM')).strip().upper()
-            f_pct = fila_ind.get('F%', 20.0)
+            sucs_raw = str(fila_ind.get('SUCS', 'SM')).strip().upper()
+            if sucs_raw and sucs_raw != 'NAN':
+                sucs = sucs_raw
+            f_pct = _a_float(fila_ind.get('F%', 20.0), 20.0)
             desc_estrato = str(fila_ind.get('Descripción', fila_ind.get('Descripcion', ''))).strip()
-            if 'Tipo_Mecanico' in fila_ind and pd.notna(fila_ind['Tipo_Mecanico']):
-                tipo = str(fila_ind['Tipo_Mecanico']).capitalize()
+            tm_raw = str(fila_ind.get('Tipo_Mecanico', '')).strip()
+            if tm_raw and tm_raw.lower() != 'nan':
+                tipo = tm_raw.capitalize()
             else:
                 if 'ROCA' in sucs or sucs.startswith('R'):
                     tipo = 'Roca'
@@ -149,14 +174,14 @@ def procesar_datos_superficiales(xls_path_o_bytes, metodo_exploracion="SPT"):
                 else:
                     tipo = 'Friccionante'
 
-        if 'SUCS' in row and pd.notna(row['SUCS']):
+        if 'SUCS' in row and pd.notna(row['SUCS']) and str(row['SUCS']).strip() != '':
             sucs = str(row['SUCS']).strip().upper()
-        if 'Tipo_Mecanico' in row and pd.notna(row['Tipo_Mecanico']):
-            tipo = str(row['Tipo_Mecanico']).capitalize()
+        if 'Tipo_Mecanico' in row and pd.notna(row['Tipo_Mecanico']) and str(row['Tipo_Mecanico']).strip() != '':
+            tipo = str(row['Tipo_Mecanico']).strip().capitalize()
 
-        phi_lab = float(row['Angulo_deg']) if ('Angulo_deg' in row and pd.notna(row['Angulo_deg'])) else np.nan
-        coh_lab = float(row['Cohesion_kPa']) if ('Cohesion_kPa' in row and pd.notna(row['Cohesion_kPa'])) else np.nan
-        es_lab = float(row['Es_kPa']) if ('Es_kPa' in row and pd.notna(row['Es_kPa'])) else np.nan
+        phi_lab = _a_float(row.get('Angulo_deg', np.nan), np.nan)
+        coh_lab = _a_float(row.get('Cohesion_kPa', np.nan), np.nan)
+        es_lab = _a_float(row.get('Es_kPa', np.nan), np.nan)
 
         n_campo = _convertir_spt_campo(row.get('SPT', np.nan))
         n_corr = n_campo
@@ -171,12 +196,12 @@ def procesar_datos_superficiales(xls_path_o_bytes, metodo_exploracion="SPT"):
         else:
             n60 = np.nan
 
-        w_pct = row.get('W%', np.nan)
+        w_pct = _a_float(row.get('W%', np.nan), np.nan)
         bajo_naf = (naf is not None and p_med > naf)
-        gamma_manual = row.get('Gamma_kN_m3', np.nan)
+        gamma_manual = _a_float(row.get('Gamma_kN_m3', np.nan), np.nan)
 
-        if pd.notna(gamma_manual) and float(gamma_manual) > 0:
-            gamma = float(gamma_manual)
+        if pd.notna(gamma_manual) and gamma_manual > 0:
+            gamma = gamma_manual
         else:
             gamma = _estimar_gamma_estrato(tipo, sucs, n60, w_pct, f_pct, bajo_naf)
 
@@ -263,20 +288,24 @@ def _obtener_parametros_bulbo(df_tramos, naf_m, Df, B, es_corrida=False):
 
     pv = 0.0
     for _, t in df_tramos.iterrows():
-        if t['Prof_ini'] >= Df:
+        p_i = _a_float(t['Prof_ini'], 0.0)
+        p_f = _a_float(t['Prof_fin'], p_i)
+        gam = _a_float(t.get('Gamma', t.get('Gamma_kN_m3', 18.0)), 18.0)
+        if p_i >= Df:
             break
-        dz = min(t['Prof_fin'], Df) - t['Prof_ini']
+        dz = min(p_f, Df) - p_i
         if dz <= 0:
             continue
-        p_med_sub = t['Prof_ini'] + dz / 2.0
-        g_eff = (t['Gamma'] - gamma_w) if (naf_m is not None and p_med_sub > naf_m) else t['Gamma']
+        p_med_sub = p_i + dz / 2.0
+        g_eff = (gam - gamma_w) if (naf_m is not None and p_med_sub > naf_m) else gam
         pv += g_eff * dz
 
-    prof_max_sondeo = df_tramos['Prof_fin'].max()
+    prof_max_sondeo = df_tramos['Prof_fin'].apply(lambda x: _a_float(x, 0.0)).max()
     if Df > prof_max_sondeo:
         ult = df_tramos.iloc[-1]
+        gam_ult = _a_float(ult.get('Gamma', ult.get('Gamma_kN_m3', 18.0)), 18.0)
         dz_ext = Df - prof_max_sondeo
-        g_eff = (ult['Gamma'] - gamma_w) if (naf_m is not None and (prof_max_sondeo + dz_ext / 2.0) > naf_m) else ult['Gamma']
+        g_eff = (gam_ult - gamma_w) if (naf_m is not None and (prof_max_sondeo + dz_ext / 2.0) > naf_m) else gam_ult
         pv += g_eff * dz_ext
 
     h_bulbo = 2.0 * B if es_corrida else 1.5 * B
@@ -294,36 +323,43 @@ def _obtener_parametros_bulbo(df_tramos, naf_m, Df, B, es_corrida=False):
     conteo_spt = 0.0
 
     for _, t in df_tramos.iterrows():
-        overlap_ini = max(t['Prof_ini'], z_ini_b)
-        overlap_fin = min(t['Prof_fin'], z_fin_b)
+        p_i = _a_float(t['Prof_ini'], 0.0)
+        p_f = _a_float(t['Prof_fin'], p_i)
+        overlap_ini = max(p_i, z_ini_b)
+        overlap_fin = min(p_f, z_fin_b)
         dz = overlap_fin - overlap_ini
         if dz <= 0:
             continue
 
-        c_acum += t['c_kPa'] * dz
-        tan_phi_acum += math.tan(math.radians(t['phi_deg'])) * dz
-        gamma_nat_acum += t['Gamma'] * dz
-        es_inv_acum += (dz / max(t['Es_kPa'], 1000.0))
+        c_val = _a_float(t.get('c_kPa', 0.0), 0.0)
+        phi_val = _a_float(t.get('phi_deg', 0.0), 0.0)
+        gam_val = _a_float(t.get('Gamma', t.get('Gamma_kN_m3', 18.0)), 18.0)
+        es_val = _a_float(t.get('Es_kPa', 10000.0), 10000.0)
 
-        n60_val = t['N60'] if ('N60' in t and pd.notna(t['N60'])) else np.nan
+        c_acum += c_val * dz
+        tan_phi_acum += math.tan(math.radians(phi_val)) * dz
+        gamma_nat_acum += gam_val * dz
+        es_inv_acum += (dz / max(es_val, 1000.0))
+
+        n60_val = _a_float(t.get('N60', np.nan), np.nan)
         if pd.notna(n60_val):
-            n1_val = t['N1_60'] if ('N1_60' in t and pd.notna(t['N1_60'])) else n60_val
-            cn_val = t['Cn'] if ('Cn' in t and pd.notna(t['Cn'])) else 1.0
-            n60_acum += float(n60_val) * dz
-            n1_60_acum += float(n1_val) * dz
-            cn_acum += float(cn_val) * dz
+            n1_val = _a_float(t.get('N1_60', n60_val), n60_val)
+            cn_val = _a_float(t.get('Cn', 1.0), 1.0)
+            n60_acum += n60_val * dz
+            n1_60_acum += n1_val * dz
+            cn_acum += cn_val * dz
             conteo_spt += dz
         peso_total += dz
 
     if peso_total <= 0:
         ult = df_tramos.iloc[-1]
-        c_prom = float(ult['c_kPa'])
-        phi_prom = float(ult['phi_deg'])
-        gamma_nat = float(ult['Gamma'])
-        es_prom = float(ult['Es_kPa'])
-        n60_prom = float(ult['N60']) if ('N60' in ult and pd.notna(ult['N60'])) else np.nan
-        n1_60_prom = float(ult['N1_60']) if ('N1_60' in ult and pd.notna(ult['N1_60'])) else np.nan
-        cn_prom = float(ult['Cn']) if ('Cn' in ult and pd.notna(ult['Cn'])) else np.nan
+        c_prom = _a_float(ult.get('c_kPa', 0.0), 0.0)
+        phi_prom = _a_float(ult.get('phi_deg', 30.0), 30.0)
+        gamma_nat = _a_float(ult.get('Gamma', ult.get('Gamma_kN_m3', 18.0)), 18.0)
+        es_prom = _a_float(ult.get('Es_kPa', 10000.0), 10000.0)
+        n60_prom = _a_float(ult.get('N60', np.nan), np.nan)
+        n1_60_prom = _a_float(ult.get('N1_60', np.nan), np.nan)
+        cn_prom = _a_float(ult.get('Cn', np.nan), np.nan)
     else:
         c_prom = c_acum / peso_total
         phi_prom = math.degrees(math.atan(tan_phi_acum / peso_total))
