@@ -89,13 +89,21 @@ def generar_plantilla_excel():
                           'Coordenadas', 'Elevacion_Sup', 'Elevacion_Fondo', 'Rasante_Final', 'NAF', 'Fecha_NAF',
                           'Eficiencia_SPT', 'Diametro_Barrena_mm', 'Muestreador_Liner', 'Gamma_Default_kN_m3',
                           'Diametro_Min_m', 'Diametro_Max_m', 'Diametro_Paso_m',
-                          'Longitud_Min_m', 'Longitud_Max_m', 'Longitud_Paso_m'],
+                          'Longitud_Min_m', 'Longitud_Max_m', 'Longitud_Paso_m',
+                          'Zap_Df_Min_m', 'Zap_Df_Max_m', 'Zap_Df_Paso_m',
+                          'Zap_Corrida_B_Min_m', 'Zap_Corrida_B_Max_m', 'Zap_Corrida_B_Paso_m',
+                          'Zap_Aislada_B_Min_m', 'Zap_Aislada_B_Max_m', 'Zap_Aislada_B_Paso_m',
+                          'Zap_Colindante', 'Zap_Se_Max_Corrida_cm', 'Zap_Se_Max_Aislada_cm', 'Zap_Margen_Deformacion_pct'],
             'Valor': ['ESTUDIO DE MECÁNICA DE SUELOS', 'SISTEMA DE TRANSPORTE POR CABLE', 'PERFIL ESTRATIGRÁFICO TORRE 11', 
                       'OCTUBRE 2026', 'logo_empresa.png', 
                       'N 3,539,426   E 514,589   WGS84', '48.7 m (rel. MSL)', '16.7 m (rel. MSL)', '48.7 m (rel. MSL)', '5.8', '2026-10-08',
                       '60', '100', 'CON_LINER', '18.0',
                       '1.0', '2.0', '0.2',
-                      '15.0', '25.0', '1.0']
+                      '15.0', '25.0', '1.0',
+                      '1.2', '2.0', '0.2',
+                      '0.6', '1.2', '0.2',
+                      '1.2', '2.4', '0.3',
+                      'NO', '2.5', '5.0', '80.0']
         })
         df_proy.to_excel(writer, sheet_name='Proyecto', index=False)
         
@@ -109,6 +117,7 @@ def generar_plantilla_excel():
             'Gamma_kN_m3': [17.5, 18.0, 18.5, 19.0, 22.0, 24.0],
             'Angulo_deg': [np.nan, 28, np.nan, np.nan, np.nan, 35],
             'Cohesion_kPa': [np.nan, 35, np.nan, np.nan, np.nan, 50],
+            'Es_kPa': [np.nan, 14500.0, np.nan, np.nan, np.nan, np.nan],
             'UC_Roca_MPa': [np.nan, np.nan, np.nan, np.nan, 85, 120],
             'PLT_MPa': [np.nan, np.nan, np.nan, np.nan, 40, 55]
         })
@@ -411,12 +420,12 @@ def generar_pdf_desde_excel(archivo_excel):
 # 3. INTERFAZ GRÁFICA PRINCIPAL (CON PESTAÑAS)
 # ==========================================
 st.title("🏗️ Portal de Ingeniería Geotécnica")
-st.caption("Perfiles Estratigráficos (ISO 710-2), Cimentaciones Profundas y Superficiales (NTC-CDMX 2023 / NTC-Puebla)")
+st.caption("Perfiles Estratigráficos (ISO 710-2), Cimentaciones Profundas y Superficiales (NTC-CDMX 2023)")
 
 tab_perfil, tab_cimentacion, tab_zapatas = st.tabs([
     "📄 Perfil Estratigráfico ISO 710-2",
     "🏗️ Cimentaciones Profundas (Pilas)",
-    "📐 Zapatas Superficiales (NTC CDMX / Puebla)"
+    "📐 Zapatas Superficiales (NTC-CDMX 2023)"
 ])
 
 with tab_perfil:
@@ -424,7 +433,7 @@ with tab_perfil:
     st.markdown("Herramienta técnica para generación de perfiles estratigráficos bajo la norma ISO 710-2.")
 
     st.markdown("### 1. Plantilla de Datos")
-    st.info("Descarga la plantilla Excel con las columnas de resistencia y clasificación actualizadas.")
+    st.info("Descarga la plantilla Excel con las columnas de resistencia, colindancia y módulo secante axial actualizadas.")
     st.download_button(
         label="📥 Descargar Plantilla Excel",
         data=generar_plantilla_excel(),
@@ -603,8 +612,8 @@ with tab_cimentacion:
 # 4. PESTAÑA 3: CIMENTACIONES SUPERFICIALES (ZAPATAS)
 # ==========================================
 with tab_zapatas:
-    st.header("Cálculo de Cimentaciones Superficiales — Zapatas Aisladas y Corridas")
-    st.caption("Evaluación dual bajo NTC-CDMX 2023 y NTC-Puebla, seleccionando automáticamente la condición más desfavorable.")
+    st.header("Cálculo de Cimentaciones Superficiales — NTC-CDMX 2023")
+    st.caption("Revisión combinada de Estado Límite de Falla (esfuerzo cortante) vs. Estado Límite de Servicio (deformación elástica acotada al margen normativo).")
 
     col_met, col_info = st.columns([1, 2])
     with col_met:
@@ -616,9 +625,9 @@ with tab_zapatas:
         )
     with col_info:
         if metodo_exp_zap == "SPT":
-            st.info("**Modo SPT:** Deduce $\\phi$, $c_u$ y $E_s$ mediante correlaciones corregidas ($C_N$, $N_{60}$, $(N_1)_{60}$) ponderadas en el bulbo de presiones ($D_f$ a $D_f + 1.5B$).")
+            st.info("**Modo SPT (NTC-CDMX 2023):** Deduce $\\phi$, $c_u$ mediante correlaciones corregidas ($C_N$, $N_{60}$, $(N_1)_{60}$). Si capturas el **Módulo Elástico Secante ($E_{s,\\text{sec}}$)** del ensaye axial, se usará directamente para el control de deformaciones.")
         else:
-            st.info("**Modo PCA (Muestras Inalteradas):** Emplea directamente los parámetros de laboratorio ($c$, $\\phi$, $\\gamma$) registrados en `Humedades` (o en una hoja opcional `PCA`). Puedes ajustar los valores en la tabla inferior.")
+            st.info("**Modo PCA (Muestras Inalteradas):** Emplea los parámetros de laboratorio ($c$, $\\phi$, $\\gamma$) y el **Módulo Elástico Secante ($E_{s,\\text{sec}}$)** del ensaye axial. Puedes capturar o editar los valores en la tabla inferior.")
 
     archivo_zap = st.file_uploader("Carga el archivo Datos_Sondeo.xlsx", type=["xlsx"], key="uploader_zapatas")
 
@@ -627,19 +636,61 @@ with tab_zapatas:
             df_tramos_z, naf_z, cfg_z = procesar_datos_superficiales(archivo_zap, metodo_exploracion=metodo_exp_zap)
             st.success(f"Archivo procesado ({metodo_exp_zap}): {len(df_tramos_z)} estratos detectados. NAF: {naf_z} m")
 
-            st.markdown("#### Parámetros Geotécnicos por Estrato (Editables antes de calcular)")
-            cols_edit_z = ['Prof_ini', 'Prof_fin', 'SUCS', 'Tipo', 'Gamma', 'c_kPa', 'phi_deg', 'Es_kPa']
+            col_tb_tit, col_tb_unit = st.columns([2, 1])
+            with col_tb_tit:
+                st.markdown("#### Parámetros Geotécnicos por Estrato (Introduce aquí el Módulo Elástico Secante Axial $E_{s,\\text{sec}}$)")
+            with col_tb_unit:
+                unidad_es_sec = st.selectbox(
+                    "Unidad de captura para Es Secante:",
+                    options=["kPa", "kg/cm²", "MPa"],
+                    index=0,
+                    help="Selecciona la unidad en la que tu laboratorio reporta el módulo elástico secante (E50) del ensaye axial. Internamente se convierte a kPa.",
+                    key="unidad_es_sec_zap"
+                )
+
+            factor_es_unidad = 1.0 if unidad_es_sec == "kPa" else (98.0665 if unidad_es_sec == "kg/cm²" else 1000.0)
+            col_es_display = f"Es_sec ({unidad_es_sec})"
+
+            df_vista_editor = df_tramos_z.copy()
+            df_vista_editor[col_es_display] = (df_vista_editor['Es_kPa'] / factor_es_unidad).round(2)
+
+            cols_edit_z = ['Prof_ini', 'Prof_fin', 'SUCS', 'Tipo', 'Gamma', 'c_kPa', 'phi_deg', col_es_display, 'Origen_Es']
             if metodo_exp_zap == "SPT":
                 cols_edit_z.insert(5, 'N60')
                 cols_edit_z.insert(6, 'N1_60')
 
-            df_tramos_z_edit = st.data_editor(
-                df_tramos_z[cols_edit_z],
+            df_tramos_z_edit_raw = st.data_editor(
+                df_vista_editor[cols_edit_z],
+                column_config={
+                    "Prof_ini": st.column_config.NumberColumn("Prof. Ini (m)", format="%.2f", disabled=True),
+                    "Prof_fin": st.column_config.NumberColumn("Prof. Fin (m)", format="%.2f", disabled=True),
+                    "SUCS": st.column_config.TextColumn("SUCS"),
+                    "Tipo": st.column_config.SelectboxColumn(
+                        "Comportamiento",
+                        options=["Cohesivo", "Friccionante", "Cohesivo-Friccionante", "Roca"]
+                    ),
+                    "Gamma": st.column_config.NumberColumn("γ (kN/m³)", min_value=10.0, max_value=28.0, step=0.1, format="%.2f"),
+                    "c_kPa": st.column_config.NumberColumn("Cohesión c (kPa)", min_value=0.0, step=1.0, format="%.2f"),
+                    "phi_deg": st.column_config.NumberColumn("Fricción φ (°)", min_value=0.0, max_value=50.0, step=0.5, format="%.2f"),
+                    col_es_display: st.column_config.NumberColumn(
+                        f"Es Secante Axial ({unidad_es_sec})",
+                        min_value=0.1,
+                        step=10.0 if unidad_es_sec != "MPa" else 1.0,
+                        format="%.2f",
+                        help=f"Módulo elástico secante (E50) obtenido del ensaye axial de laboratorio en {unidad_es_sec}."
+                    ),
+                    "Origen_Es": st.column_config.TextColumn("Origen Es", disabled=True)
+                },
                 width="stretch",
                 hide_index=True,
                 key="editor_estratos_zapatas"
             )
 
+            # Convertir el módulo secante editado de vuelta a kPa para el motor de cálculo
+            df_tramos_z_calc = df_tramos_z_edit_raw.copy()
+            df_tramos_z_calc['Es_kPa'] = pd.to_numeric(df_tramos_z_calc[col_es_display], errors='coerce').fillna(100.0) * factor_es_unidad
+
+            st.markdown("#### Geometrías a Evaluar")
             col_z1, col_z2, col_z3 = st.columns(3)
             with col_z1:
                 st.subheader("Desplante Df (m)")
@@ -659,23 +710,60 @@ with tab_zapatas:
                 z_ba_max = st.number_input("Ancho Aislada Máx. (m)", value=cfg_z['ba_max'], min_value=z_ba_min, step=0.20, key="z_ba_max")
                 z_ba_paso = st.number_input("Paso Aislada (m)", value=cfg_z['ba_paso'], min_value=0.10, step=0.10, key="z_ba_paso")
 
+            st.markdown("#### Parámetros Normativos (NTC-CDMX 2023) y Control de Deformaciones")
             col_p1, col_p2, col_p3, col_p4 = st.columns(4)
             with col_p1:
-                rel_lb = st.number_input("Relación L / B (Aislada)", value=1.0, min_value=1.0, max_value=5.0, step=0.25, key="z_rel_lb")
+                ubicacion_zap = st.selectbox(
+                    "Ubicación / Factor FR (Tabla 3.6.1):",
+                    options=["Interior / Central (FR = 0.65)", "Colindante / Lindero (FR = 0.35)"],
+                    index=1 if cfg_z.get('es_colindante', False) else 0,
+                    help="NTC-CDMX 2023 Tabla 3.6.1: FR = 0.65 para zapatas interiores; FR = 0.35 para zapatas colindantes.",
+                    key="z_ubicacion_fr"
+                )
+                es_colindante_zap = "0.35" in ubicacion_zap
+                fr_cdmx_zap = 0.35 if es_colindante_zap else 0.65
+
             with col_p2:
-                fs_zap = st.number_input("Factor Seguridad (FS)", value=3.0, min_value=1.5, max_value=5.0, step=0.5, key="z_fs")
+                rel_lb = st.number_input("Relación L / B (Aislada)", value=1.0, min_value=1.0, max_value=5.0, step=0.25, key="z_rel_lb")
             with col_p3:
-                nu_zap = st.number_input("Relación de Poisson (ν)", value=0.30, min_value=0.15, max_value=0.49, step=0.05, key="z_nu")
+                fs_zap = st.number_input("Factor Seguridad Corte (FS)", value=3.0, min_value=1.5, max_value=5.0, step=0.5, key="z_fs")
             with col_p4:
-                fr_cdmx_zap = st.selectbox("FR NTC-CDMX 2023", options=[0.65, 0.35], index=0, key="z_fr_cdmx")
+                nu_zap = st.number_input("Relación de Poisson (ν)", value=0.30, min_value=0.15, max_value=0.49, step=0.05, key="z_nu")
+
+            col_s1, col_s2, col_s3 = st.columns(3)
+            with col_s1:
+                se_max_corr_mm = st.number_input(
+                    "Deformación Máx. Permitida Corrida (mm)",
+                    value=float(cfg_z.get('se_max_corrida_cm', 2.5) * 10.0),
+                    min_value=5.0, max_value=100.0, step=5.0,
+                    help="Límite normativo de asentamiento para zapatas corridas (por defecto 25 mm = 2.5 cm).",
+                    key="z_se_max_corr_mm"
+                )
+            with col_s2:
+                se_max_ais_mm = st.number_input(
+                    "Deformación Máx. Permitida Aislada (mm)",
+                    value=float(cfg_z.get('se_max_aislada_cm', 5.0) * 10.0),
+                    min_value=10.0, max_value=150.0, step=5.0,
+                    help="Límite normativo de asentamiento para zapatas aisladas (por defecto 50 mm = 5.0 cm).",
+                    key="z_se_max_ais_mm"
+                )
+            with col_s3:
+                margen_def_pct = st.slider(
+                    "Margen de Deformación Objetivo (% de Se_máx)",
+                    min_value=50, max_value=100,
+                    value=int(cfg_z.get('margen_se_pct', 80.0)),
+                    step=5,
+                    help="Porcentaje máximo de la deformación permitida que se usará para acotar la capacidad recomendada (ej. 80% de 50 mm = 40 mm).",
+                    key="z_margen_def_pct"
+                )
 
             df_list_z = np.arange(z_df_min, z_df_max + z_df_paso / 2, z_df_paso).round(2).tolist()
             bc_list_z = np.arange(z_bc_min, z_bc_max + z_bc_paso / 2, z_bc_paso).round(2).tolist()
             ba_list_z = np.arange(z_ba_min, z_ba_max + z_ba_paso / 2, z_ba_paso).round(2).tolist()
 
-            if st.button("Calcular Zapatas (NTC-CDMX 2023 vs NTC-Puebla)", type="primary", key="btn_calc_zapatas"):
+            if st.button("Calcular Zapatas (NTC-CDMX 2023: Falla vs. Deformación)", type="primary", key="btn_calc_zapatas"):
                 analisis_z = generar_analisis_parametrico_zapatas(
-                    df_tramos_z_edit,
+                    df_tramos_z_calc,
                     naf_z,
                     df_list=df_list_z,
                     b_corridas=bc_list_z,
@@ -684,51 +772,76 @@ with tab_zapatas:
                     metodo_exploracion=metodo_exp_zap,
                     FS=fs_zap,
                     nu=nu_zap,
-                    fr_cdmx_override=fr_cdmx_zap
+                    fr_cdmx=fr_cdmx_zap,
+                    es_colindante=es_colindante_zap,
+                    se_max_corrida_cm=se_max_corr_mm / 10.0,
+                    se_max_aislada_cm=se_max_ais_mm / 10.0,
+                    factor_margen_se=margen_def_pct / 100.0
                 )
                 st.session_state['analisis_zapatas_calc'] = analisis_z
+                st.session_state['df_tramos_z_pdf'] = df_tramos_z_calc
 
             if 'analisis_zapatas_calc' in st.session_state:
                 az = st.session_state['analisis_zapatas_calc']
+                df_z_pdf = st.session_state.get('df_tramos_z_pdf', df_tramos_z_calc)
                 df_corr_v = az['df_corridas']
                 df_ais_v = az['df_aisladas']
 
                 st.markdown("---")
-                st.subheader("1. Comparativa Normativa y Capacidad Gobernante (Más Desfavorable)")
+                st.subheader("1. Revisión Combinada: Capacidad por Corte vs. Capacidad Limitada por Deformación")
+                st.caption(
+                    f"Condición activa: **{ubicacion_zap}** | Control de deformación objetivo: **{margen_def_pct}% de Se_máx** "
+                    f"({se_max_corr_mm * margen_def_pct / 100.0:.1f} mm en corridas | {se_max_ais_mm * margen_def_pct / 100.0:.1f} mm en aisladas)."
+                )
 
-                cols_vista_z = ['Df', 'B', 'L', 'r_cdmx_kgcm2', 'r_puebla_kgcm2', 'norma_gobernante', 'r_gob_kgcm2', 'q_adm_kgcm2', 'q_adm_tonm2', 'Se_cm', 'ks_ton_m3']
+                cols_vista_z = [
+                    'Df', 'B', 'r_cdmx_kgcm2', 'q_adm_corte_kgcm2', 'Se_corte_mm',
+                    'q_adm_def_kgcm2', 'criterio_gobernante', 'q_rec_kgcm2', 'q_rec_tonm2',
+                    'Se_final_mm', 'ks_ton_m3'
+                ]
+
+                formato_tabla_z = {
+                    'Df': '{:.2f} m',
+                    'B': '{:.2f} m',
+                    'r_cdmx_kgcm2': '{:.2f}',
+                    'q_adm_corte_kgcm2': '{:.2f}',
+                    'Se_corte_mm': '{:.1f} mm',
+                    'q_adm_def_kgcm2': '{:.2f}',
+                    'q_rec_kgcm2': '{:.2f} kg/cm²',
+                    'q_rec_tonm2': '{:.1f} t/m²',
+                    'Se_final_mm': '{:.1f} mm',
+                    'ks_ton_m3': '{:.0f} t/m³'
+                }
 
                 st.markdown("#### A. Zapatas Corridas ($L \\gg B$)")
                 st.dataframe(
-                    df_corr_v[cols_vista_z].style.format({
-                        'Df': '{:.2f} m', 'B': '{:.2f} m', 'L': '{:.2f} m',
-                        'r_cdmx_kgcm2': '{:.2f}', 'r_puebla_kgcm2': '{:.2f}',
-                        'r_gob_kgcm2': '{:.2f} kg/cm²', 'q_adm_kgcm2': '{:.2f} kg/cm²',
-                        'q_adm_tonm2': '{:.1f} t/m²', 'Se_cm': '{:.3f} cm', 'ks_ton_m3': '{:.0f} t/m³'
-                    }),
+                    df_corr_v[cols_vista_z].style.format(formato_tabla_z),
                     width="stretch",
                     hide_index=True
                 )
 
                 st.markdown("#### B. Zapatas Aisladas ($B \\times L$)")
                 st.dataframe(
-                    df_ais_v[cols_vista_z].style.format({
-                        'Df': '{:.2f} m', 'B': '{:.2f} m', 'L': '{:.2f} m',
-                        'r_cdmx_kgcm2': '{:.2f}', 'r_puebla_kgcm2': '{:.2f}',
-                        'r_gob_kgcm2': '{:.2f} kg/cm²', 'q_adm_kgcm2': '{:.2f} kg/cm²',
-                        'q_adm_tonm2': '{:.1f} t/m²', 'Se_cm': '{:.3f} cm', 'ks_ton_m3': '{:.0f} t/m³'
-                    }),
+                    df_ais_v[cols_vista_z].style.format(formato_tabla_z),
                     width="stretch",
                     hide_index=True
                 )
 
                 col_m1, col_m2 = st.columns(2)
                 with col_m1:
-                    st.markdown("#### Matriz $q_{adm}$ Gobernante — Corridas (kg/cm²)")
-                    st.dataframe(az['mat_corr_qadm_kgcm2'].style.format("{:.2f} kg/cm²").highlight_max(axis=0, color="#d4edda"))
+                    st.markdown("#### Matriz $q_{\\text{rec}}$ Recomendada — Corridas (kg/cm²)")
+                    st.dataframe(az['mat_corr_qrec_kgcm2'].style.format("{:.2f} kg/cm²").highlight_max(axis=0, color="#d4edda"))
                 with col_m2:
-                    st.markdown("#### Matriz $q_{adm}$ Gobernante — Aisladas (kg/cm²)")
-                    st.dataframe(az['mat_ais_qadm_kgcm2'].style.format("{:.2f} kg/cm²").highlight_max(axis=0, color="#d4edda"))
+                    st.markdown("#### Matriz $q_{\\text{rec}}$ Recomendada — Aisladas (kg/cm²)")
+                    st.dataframe(az['mat_ais_qrec_kgcm2'].style.format("{:.2f} kg/cm²").highlight_max(axis=0, color="#d4edda"))
+
+                col_s_m1, col_s_m2 = st.columns(2)
+                with col_s_m1:
+                    st.markdown("#### Matriz Deformación Esperada $S_e$ — Corridas (cm)")
+                    st.dataframe(az['mat_corr_se_final_cm'].style.format("{:.2f} cm"))
+                with col_s_m2:
+                    st.markdown("#### Matriz Deformación Esperada $S_e$ — Aisladas (cm)")
+                    st.dataframe(az['mat_ais_se_final_cm'].style.format("{:.2f} cm"))
 
                 st.markdown("---")
                 st.subheader("Generar Memoria de Cálculo de Zapatas en PDF")
@@ -744,13 +857,13 @@ with tab_zapatas:
 
                 with st.spinner("Compilando memoria ejecutiva de zapatas en PDF..."):
                     pdf_zap_bytes = generar_memoria_zapatas_pdf(
-                        df_tramos_z_edit, az, nm_proy_z, nm_elem_z, nm_sondeo_z, nm_fecha_z
+                        df_z_pdf, az, nm_proy_z, nm_elem_z, nm_sondeo_z, nm_fecha_z
                     )
 
                 st.download_button(
                     label="📄 Descargar Memoria de Cálculo Zapatas PDF",
                     data=pdf_zap_bytes,
-                    file_name=f"Memoria_Zapatas_Superficiales_{metodo_exp_zap}.pdf",
+                    file_name=f"Memoria_Zapatas_NTC_CDMX_2023_{metodo_exp_zap}.pdf",
                     mime="application/pdf",
                     type="primary",
                     key="btn_descarga_pdf_zapatas"

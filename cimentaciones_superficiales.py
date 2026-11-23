@@ -1,7 +1,16 @@
 # ==============================================================================
 # MODULO: cimentaciones_superficiales.py
-# VERSION: 1.0.2-NTC2023-NTCPUEBLA-SPT-PCA-SAFEFLOAT
-# REVISION NORMATIVA: NTC-CDMX 2023 (Cap. 3.5) & NTC-PUEBLA (Cimentaciones)
+# VERSION: 2.1.0-NTC2023-CDMX-COLINDANTE-SERVICIO
+# REVISION NORMATIVA: NTC-CDMX 2023 (Numeral 3.5.1 y Tabla 3.6.1)
+# DESCRIPCION:
+#   Evaluacion de cimentaciones superficiales (Zapatas Corridas y Aisladas)
+#   exclusivamente bajo NTC-CDMX 2023, considerando:
+#     1. Condicion de ubicacion: Zapata Interior (FR = 0.65) vs. Zapata
+#        Colindante / de Lindero (FR = 0.35, Tabla 3.6.1 NTC-CDMX 2023)
+#     2. Estado Limite de Falla (r_CDMX y q_adm_corte)
+#     3. Estado Limite de Servicio: Deformacion elastica (Se_corte) vs.
+#        Deformacion Objetivo (80% de Se_max por defecto) -> Capacidad
+#        Recomendada Gobernante (q_rec).
 # ==============================================================================
 
 import math
@@ -89,6 +98,39 @@ def _estimar_gamma_estrato(tipo, sucs, n60, w_pct=None, f_pct=None, bajo_naf=Fal
     return round(max(lim_inf, min(gamma_final, 22.0)), 2)
 
 
+def _extraer_modulo_secante_fila(row):
+    """
+    Busca el modulo elastico secante de ensaye axial en el Excel bajo distintos
+    nombres posibles de columna y lo convierte a kPa:
+      - En kPa: Es_kPa, Es_sec_kPa, Modulo_Secante_kPa, E50_kPa
+      - En MPa: Es_MPa, Es_sec_MPa, Modulo_Secante_MPa, E50_MPa
+      - En kg/cm2: Es_kgcm2, Es_sec_kgcm2, Modulo_Secante_kgcm2, E50_kgcm2
+    """
+    cols_kpa = ['Es_kPa', 'Es_sec_kPa', 'Modulo_Secante_kPa', 'E50_kPa']
+    cols_mpa = ['Es_MPa', 'Es_sec_MPa', 'Modulo_Secante_MPa', 'E50_MPa']
+    cols_kgcm2 = ['Es_kgcm2', 'Es_sec_kgcm2', 'Modulo_Secante_kgcm2', 'E50_kgcm2']
+
+    for c in cols_kpa:
+        if c in row:
+            v = _a_float(row[c], np.nan)
+            if pd.notna(v) and v > 0:
+                return v
+
+    for c in cols_mpa:
+        if c in row:
+            v = _a_float(row[c], np.nan)
+            if pd.notna(v) and v > 0:
+                return v * 1000.0
+
+    for c in cols_kgcm2:
+        if c in row:
+            v = _a_float(row[c], np.nan)
+            if pd.notna(v) and v > 0:
+                return v * 98.0665
+
+    return np.nan
+
+
 def procesar_datos_superficiales(xls_path_o_bytes, metodo_exploracion="SPT"):
     """
     Lee el archivo Excel estandar (Datos_Sondeo.xlsx) y prepara la estratigrafia
@@ -110,8 +152,13 @@ def procesar_datos_superficiales(xls_path_o_bytes, metodo_exploracion="SPT"):
     else:
         df_fuente = df_hum.copy()
 
-    # Limpieza de columnas numericas para evitar errores por espacios ' ' o celdas vacias
-    for col_num in ['Prof_ini', 'Prof_fin', 'W%', 'Gamma_kN_m3', 'Angulo_deg', 'Cohesion_kPa', 'Es_kPa']:
+    cols_limpiar = [
+        'Prof_ini', 'Prof_fin', 'W%', 'Gamma_kN_m3', 'Angulo_deg', 'Cohesion_kPa',
+        'Es_kPa', 'Es_sec_kPa', 'Modulo_Secante_kPa', 'E50_kPa',
+        'Es_MPa', 'Es_sec_MPa', 'Modulo_Secante_MPa', 'E50_MPa',
+        'Es_kgcm2', 'Es_sec_kgcm2', 'Modulo_Secante_kgcm2', 'E50_kgcm2'
+    ]
+    for col_num in cols_limpiar:
         if col_num in df_fuente.columns:
             df_fuente[col_num] = df_fuente[col_num].apply(lambda x: _a_float(x, np.nan))
     df_fuente = df_fuente.dropna(subset=['Prof_ini', 'Prof_fin']).reset_index(drop=True)
@@ -138,6 +185,10 @@ def procesar_datos_superficiales(xls_path_o_bytes, metodo_exploracion="SPT"):
         'ba_min': _a_float(df_proy.get('Zap_Aislada_B_Min_m', 1.2), 1.2),
         'ba_max': _a_float(df_proy.get('Zap_Aislada_B_Max_m', 2.4), 2.4),
         'ba_paso': _a_float(df_proy.get('Zap_Aislada_B_Paso_m', 0.3), 0.3),
+        'se_max_aislada_cm': _a_float(df_proy.get('Zap_Se_Max_Aislada_cm', 5.0), 5.0),
+        'se_max_corrida_cm': _a_float(df_proy.get('Zap_Se_Max_Corrida_cm', 2.5), 2.5),
+        'margen_se_pct': _a_float(df_proy.get('Zap_Margen_Deformacion_pct', 80.0), 80.0),
+        'es_colindante': str(df_proy.get('Zap_Colindante', 'NO')).strip().upper() in ('SI', 'SÍ', 'TRUE', '1', 'COLINDANTE'),
     }
 
     tramos = []
@@ -181,7 +232,7 @@ def procesar_datos_superficiales(xls_path_o_bytes, metodo_exploracion="SPT"):
 
         phi_lab = _a_float(row.get('Angulo_deg', np.nan), np.nan)
         coh_lab = _a_float(row.get('Cohesion_kPa', np.nan), np.nan)
-        es_lab = _a_float(row.get('Es_kPa', np.nan), np.nan)
+        es_lab = _extraer_modulo_secante_fila(row)
 
         n_campo = _convertir_spt_campo(row.get('SPT', np.nan))
         n_corr = n_campo
@@ -237,12 +288,16 @@ def procesar_datos_superficiales(xls_path_o_bytes, metodo_exploracion="SPT"):
 
             if pd.notna(es_lab) and es_lab > 0:
                 es_dis = es_lab
+                origen_es = "Ensaye Axial Lab. (Secante)"
             elif tipo_efec == 'Cohesivo':
                 es_dis = max(300.0 * c_dis, 3000.0)
+                origen_es = "Correlación Empírica (300·cu)"
             elif tipo_efec == 'Cohesivo-Friccionante':
                 es_dis = max(300.0 * c_dis + 400.0 * phi_dis, 6000.0)
+                origen_es = "Correlación Empírica (c-phi)"
             else:
                 es_dis = max(600.0 * phi_dis, 8000.0)
+                origen_es = "Correlación Empírica (phi)"
             origen_param = "Lab. PCA (Muestra Inalterada)"
         else:
             n_val_160 = n1_60 if pd.notna(n1_60) else 15.0
@@ -250,13 +305,23 @@ def procesar_datos_superficiales(xls_path_o_bytes, metodo_exploracion="SPT"):
             if tipo == 'Cohesivo':
                 c_dis = round(6.0 * n_val_60, 1)
                 phi_dis = 0.0
-                es_dis = round(300.0 * c_dis, 1)
                 tipo_efec = 'Cohesivo'
+                if pd.notna(es_lab) and es_lab > 0:
+                    es_dis = es_lab
+                    origen_es = "Ensaye Axial Lab. (Secante)"
+                else:
+                    es_dis = round(300.0 * c_dis, 1)
+                    origen_es = "Correlación Empírica (300·cu)"
             else:
                 phi_dis = round(min(45.0, 27.5 + 0.92 * math.sqrt(max(n_val_160, 1.0))), 2)
                 c_dis = 0.0
-                es_dis = round(500.0 * n_val_160, 1)
                 tipo_efec = 'Friccionante'
+                if pd.notna(es_lab) and es_lab > 0:
+                    es_dis = es_lab
+                    origen_es = "Ensaye Axial Lab. (Secante)"
+                else:
+                    es_dis = round(500.0 * n_val_160, 1)
+                    origen_es = "Correlación SPT (500·N1_60)"
             origen_param = "Correlacion SPT (N1)60"
 
         tramos.append({
@@ -275,6 +340,7 @@ def procesar_datos_superficiales(xls_path_o_bytes, metodo_exploracion="SPT"):
             'c_kPa': round(c_dis, 2),
             'phi_deg': round(phi_dis, 2),
             'Es_kPa': round(es_dis, 1),
+            'Origen_Es': origen_es,
             'Origen': origen_param,
             'Descripcion': desc_estrato
         })
@@ -339,7 +405,7 @@ def _obtener_parametros_bulbo(df_tramos, naf_m, Df, B, es_corrida=False):
         c_acum += c_val * dz
         tan_phi_acum += math.tan(math.radians(phi_val)) * dz
         gamma_nat_acum += gam_val * dz
-        es_inv_acum += (dz / max(es_val, 1000.0))
+        es_inv_acum += (dz / max(es_val, 100.0))
 
         n60_val = _a_float(t.get('N60', np.nan), np.nan)
         if pd.notna(n60_val):
@@ -403,13 +469,26 @@ def _factor_influencia_rigida(B, L, es_corrida=False):
     return round(m, 2), round(If_rigida, 4)
 
 
-def evaluar_zapata_dual(df_tramos, naf_m, B, L, Df, es_corrida=False,
+def evaluar_zapata_cdmx(df_tramos, naf_m, B, L, Df, es_corrida=False,
                         metodo_exploracion="SPT", FS=3.0, nu=0.30,
-                        fr_cdmx_override=None, fr_puebla_override=None):
+                        fr_cdmx=None, es_colindante=False,
+                        se_max_cm=None, factor_margen_se=0.80):
     """
-    Evalua simultaneamente la capacidad de carga superficial bajo NTC-CDMX 2023
-    y NTC-Puebla, seleccionando automaticamente la condicion MAS DESFAVORABLE.
+    Evalua cimentaciones superficiales exclusivamente bajo NTC-CDMX 2023 (Numeral 3.5.1),
+    considerando la ubicacion (zapata interior FR=0.65 vs. colindante FR=0.35)
+    y la revision combinada de Falla vs. Servicio (deformacion elastica).
     """
+    # Determinacion normativa de FR (NTC-CDMX 2023 Tabla 3.6.1):
+    # FR = 0.35 para zapatas colindantes / de lindero; FR = 0.65 para zapatas interiores
+    if fr_cdmx is None:
+        fr_cdmx = 0.35 if es_colindante else 0.65
+    else:
+        fr_cdmx = float(fr_cdmx)
+        if abs(fr_cdmx - 0.35) < 1e-4:
+            es_colindante = True
+
+    ubicacion_lbl = "Colindante (FR=0.35)" if es_colindante else "Interior / Central (FR=0.65)"
+
     L_calc = B * 10.0 if es_corrida else max(L, B)
     rel_BL = 0.0 if es_corrida else (B / L_calc)
     rel_DfB = min(Df / B, 2.0)
@@ -421,6 +500,7 @@ def evaluar_zapata_dual(df_tramos, naf_m, B, L, Df, es_corrida=False,
     gamma_b = bulbo['gamma_cuna']
     Es = bulbo['Es_kPa']
 
+    # Reduccion de friccion por falla local en arenas sueltas a medias (NTC-CDMX 3.5.1.2)
     phi_efec = phi
     if phi > 0 and pd.notna(bulbo['N1_60']):
         Dr = min(1.0, math.sqrt(max(bulbo['N1_60'], 1.0) / 60.0))
@@ -430,9 +510,9 @@ def evaluar_zapata_dual(df_tramos, naf_m, B, L, Df, es_corrida=False,
 
     phi_rad = math.radians(phi_efec)
 
-    # 1. NTC-CDMX 2023 (Numeral 3.5.1)
-    fr_cdmx = fr_cdmx_override if fr_cdmx_override is not None else 0.65
-
+    # ==========================================================================
+    # 1. ESTADO LIMITE DE FALLA — NTC-CDMX 2023 (Numeral 3.5.1)
+    # ==========================================================================
     if phi_efec <= 0.01:
         nc_cdmx = 5.14
         fc_cdmx = 1.0 + 0.25 * rel_DfB + 0.25 * rel_BL
@@ -461,71 +541,48 @@ def evaluar_zapata_dual(df_tramos, naf_m, B, L, Df, es_corrida=False,
 
     q_ult_neta_cdmx = term_c_cdmx + term_q_cdmx + term_g_cdmx
     r_cdmx_kpa = q_ult_neta_cdmx * fr_cdmx + pv
-    q_adm_cdmx_kpa = q_ult_neta_cdmx / FS + pv
+    q_adm_corte_kpa = q_ult_neta_cdmx / FS + pv
 
-    # 2. NTC-Puebla (Cimentaciones Superficiales)
-    if fr_puebla_override is not None:
-        fr_puebla = fr_puebla_override
-    else:
-        fr_puebla = 0.60 if metodo_exploracion.upper() == "PCA" else 0.50
-
-    if phi_efec <= 0.01:
-        nc_pue = 5.14
-        sc_pue = 1.0 + 0.20 * rel_BL
-        nc_star_pue = nc_pue * sc_pue
-        nq_star_pue = 1.0
-        ng_star_pue = 0.0
-        term_c_pue = c * nc_star_pue
-        term_q_pue = 0.0
-        term_g_pue = 0.0
-    else:
-        kp_pue = math.tan(math.radians(45.0 + phi_efec / 2.0)) ** 2
-        nq_pue = math.exp(math.pi * math.tan(phi_rad)) * kp_pue
-        nc_pue = (nq_pue - 1.0) / math.tan(phi_rad)
-        ng_pue = (nq_pue - 1.0) * math.tan(math.radians(1.4 * phi_efec))
-
-        if es_corrida:
-            sc_pue, sq_pue, sg_pue = 1.0, 1.0, 1.0
-        else:
-            sc_pue = 1.0 + 0.20 * rel_BL * kp_pue
-            if phi_efec > 10.0:
-                sq_pue = 1.0 + 0.10 * rel_BL * kp_pue
-                sg_pue = 1.0 + 0.10 * rel_BL * kp_pue
-            else:
-                sq_pue, sg_pue = 1.0, 1.0
-
-        nc_star_pue = nc_pue * sc_pue
-        nq_star_pue = nq_pue * sq_pue
-        ng_star_pue = ng_pue * sg_pue
-
-        term_c_pue = c * nc_star_pue
-        term_q_pue = pv * (nq_star_pue - 1.0)
-        term_g_pue = 0.5 * gamma_b * B * ng_star_pue
-
-    q_ult_neta_pue = term_c_pue + term_q_pue + term_g_pue
-    r_puebla_kpa = q_ult_neta_pue * fr_puebla + pv
-    q_adm_puebla_kpa = q_ult_neta_pue / FS + pv
-
-    # 3. Seleccion de condicion mas desfavorable (gobernante)
-    if r_puebla_kpa <= r_cdmx_kpa:
-        norma_gob = "NTC-Puebla"
-        r_gob_kpa = r_puebla_kpa
-        fr_gob = fr_puebla
-    else:
-        norma_gob = "NTC-CDMX 2023"
-        r_gob_kpa = r_cdmx_kpa
-        fr_gob = fr_cdmx
-
-    q_adm_fs_kpa = min(q_adm_cdmx_kpa, q_adm_puebla_kpa)
-    q_diseno_kpa = min(r_gob_kpa, q_adm_fs_kpa)
-
-    # 4. Asentamiento elastico y balasto vertical
+    # ==========================================================================
+    # 2. ESTADO LIMITE DE SERVICIO — REVISION POR DEFORMACION (80% DE Se_max)
+    # ==========================================================================
     m_val, If_rig = _factor_influencia_rigida(B, L_calc, es_corrida=es_corrida)
-    q_neta_serv = max(q_adm_fs_kpa - pv, 5.0)
-    se_m = (q_neta_serv * B * (1.0 - nu**2) * If_rig) / max(Es, 1000.0)
-    se_cm = se_m * 100.0
 
-    ks_kpa_m = q_neta_serv / max(se_m, 1e-5)
+    denom_elast = max(B * (1.0 - nu**2) * If_rig, 1e-6)
+    ks_kpa_m = max(Es, 100.0) / denom_elast
+
+    q_neta_corte = max(q_adm_corte_kpa - pv, 0.0)
+    se_corte_m = q_neta_corte / ks_kpa_m
+    se_corte_cm = se_corte_m * 100.0
+
+    se_lim_cm = float(se_max_cm) if (se_max_cm is not None and se_max_cm > 0) else (2.5 if es_corrida else 5.0)
+    margen_frac = max(0.10, min(float(factor_margen_se), 1.0))
+    se_obj_cm = se_lim_cm * margen_frac
+    se_obj_m = se_obj_cm / 100.0
+
+    q_neta_def_kpa = ks_kpa_m * se_obj_m
+    q_adm_def_kpa = q_neta_def_kpa + pv
+
+    # ==========================================================================
+    # 3. CAPACIDAD DE CARGA RECOMENDADA GOBERNANTE (FALLA vs. DEFORMACION)
+    # ==========================================================================
+    cap_falla_kpa = min(r_cdmx_kpa, q_adm_corte_kpa)
+
+    if q_adm_def_kpa < cap_falla_kpa:
+        q_rec_kpa = q_adm_def_kpa
+        criterio_gob = f"Deformación ({margen_frac * 100:.0f}% Se_máx)"
+    elif r_cdmx_kpa < q_adm_corte_kpa:
+        q_rec_kpa = r_cdmx_kpa
+        criterio_gob = f"Estado Límite Falla (FR={fr_cdmx:.2f})"
+    else:
+        q_rec_kpa = q_adm_corte_kpa
+        criterio_gob = f"Esfuerzo Cortante (FS={FS:.1f})"
+
+    q_neta_rec = max(q_rec_kpa - pv, 0.0)
+    se_final_m = q_neta_rec / ks_kpa_m
+    se_final_cm = se_final_m * 100.0
+    pct_se_max = (se_final_cm / se_lim_cm) * 100.0
+
     ks_ton_m3 = ks_kpa_m / 9.81
     ks_kg_cm3 = ks_ton_m3 / 1000.0
 
@@ -549,6 +606,8 @@ def evaluar_zapata_dual(df_tramos, naf_m, B, L, Df, es_corrida=False,
         'N1_60': bulbo['N1_60'],
         'Cn': bulbo['Cn'],
         'h_bulbo': bulbo['h_bulbo'],
+        'es_colindante': es_colindante,
+        'ubicacion_zapata': ubicacion_lbl,
         'fr_cdmx': fr_cdmx,
         'nc_star_cdmx': round(nc_star_cdmx, 2),
         'nq_star_cdmx': round(nq_star_cdmx, 2),
@@ -559,58 +618,76 @@ def evaluar_zapata_dual(df_tramos, naf_m, B, L, Df, es_corrida=False,
         'r_cdmx_kpa': round(r_cdmx_kpa, 2),
         'r_cdmx_kgcm2': round(r_cdmx_kpa * kpa_a_kgcm2, 2),
         'r_cdmx_tonm2': round(r_cdmx_kpa * kpa_a_tonm2, 2),
-        'q_adm_cdmx_kpa': round(q_adm_cdmx_kpa, 2),
-        'fr_puebla': fr_puebla,
-        'nc_star_pue': round(nc_star_pue, 2),
-        'nq_star_pue': round(nq_star_pue, 2),
-        'ng_star_pue': round(ng_star_pue, 2),
-        'term_c_pue': round(term_c_pue, 2),
-        'term_q_pue': round(term_q_pue, 2),
-        'term_g_pue': round(term_g_pue, 2),
-        'r_puebla_kpa': round(r_puebla_kpa, 2),
-        'r_puebla_kgcm2': round(r_puebla_kpa * kpa_a_kgcm2, 2),
-        'r_puebla_tonm2': round(r_puebla_kpa * kpa_a_tonm2, 2),
-        'q_adm_puebla_kpa': round(q_adm_puebla_kpa, 2),
-        'norma_gobernante': norma_gob,
-        'fr_gob': fr_gob,
-        'r_gob_kpa': round(r_gob_kpa, 2),
-        'r_gob_kgcm2': round(r_gob_kpa * kpa_a_kgcm2, 2),
-        'r_gob_tonm2': round(r_gob_kpa * kpa_a_tonm2, 2),
-        'q_adm_kpa': round(q_adm_fs_kpa, 2),
-        'q_adm_kgcm2': round(q_adm_fs_kpa * kpa_a_kgcm2, 2),
-        'q_adm_tonm2': round(q_adm_fs_kpa * kpa_a_tonm2, 2),
-        'q_diseno_kgcm2': round(q_diseno_kpa * kpa_a_kgcm2, 2),
+        'q_adm_corte_kpa': round(q_adm_corte_kpa, 2),
+        'q_adm_corte_kgcm2': round(q_adm_corte_kpa * kpa_a_kgcm2, 2),
+        'q_adm_corte_tonm2': round(q_adm_corte_kpa * kpa_a_tonm2, 2),
+        'Se_corte_cm': round(se_corte_cm, 2),
+        'Se_corte_mm': round(se_corte_cm * 10.0, 1),
+        'Se_max_cm': round(se_lim_cm, 2),
+        'Se_max_mm': round(se_lim_cm * 10.0, 1),
+        'margen_se_pct': round(margen_frac * 100.0, 0),
+        'Se_obj_cm': round(se_obj_cm, 2),
+        'Se_obj_mm': round(se_obj_cm * 10.0, 1),
+        'q_adm_def_kpa': round(q_adm_def_kpa, 2),
+        'q_adm_def_kgcm2': round(q_adm_def_kpa * kpa_a_kgcm2, 2),
+        'q_adm_def_tonm2': round(q_adm_def_kpa * kpa_a_tonm2, 2),
+        'criterio_gobernante': criterio_gob,
+        'q_rec_kpa': round(q_rec_kpa, 2),
+        'q_rec_kgcm2': round(q_rec_kpa * kpa_a_kgcm2, 2),
+        'q_rec_tonm2': round(q_rec_kpa * kpa_a_tonm2, 2),
+        'Se_final_cm': round(se_final_cm, 2),
+        'Se_final_mm': round(se_final_cm * 10.0, 1),
+        'pct_se_max': round(pct_se_max, 1),
         'FS': FS,
         'nu': nu,
         'm': m_val,
         'If': If_rig,
-        'Se_cm': round(se_cm, 3),
         'ks_ton_m3': round(ks_ton_m3, 1),
         'ks_kg_cm3': round(ks_kg_cm3, 2)
     }
 
 
+evaluar_zapata_dual = evaluar_zapata_cdmx
+
+
 def generar_analisis_parametrico_zapatas(df_tramos, naf_m, df_list, b_corridas, b_aisladas,
                                          rel_LB_aislada=1.0, metodo_exploracion="SPT",
-                                         FS=3.0, nu=0.30, fr_cdmx_override=None, fr_puebla_override=None):
-    """Evalua todas las combinaciones parametricas de Df y B para zapatas corridas y aisladas."""
+                                         FS=3.0, nu=0.30, fr_cdmx=None, es_colindante=False,
+                                         se_max_corrida_cm=2.5, se_max_aislada_cm=5.0,
+                                         factor_margen_se=0.80,
+                                         fr_cdmx_override=None, fr_puebla_override=None):
+    """
+    Evalua todas las combinaciones parametricas de Df y B para zapatas corridas
+    y aisladas bajo NTC-CDMX 2023, integrando la condicion de colindancia (FR=0.35)
+    y la revision por deformacion admisible.
+    """
+    if fr_cdmx_override is not None:
+        fr_usar = float(fr_cdmx_override)
+    elif fr_cdmx is not None:
+        fr_usar = float(fr_cdmx)
+    else:
+        fr_usar = 0.35 if es_colindante else 0.65
+
+    colindante_flag = es_colindante or (abs(fr_usar - 0.35) < 1e-4)
     resultados = []
 
     for df in df_list:
         for b in b_corridas:
-            res_c = evaluar_zapata_dual(
+            res_c = evaluar_zapata_cdmx(
                 df_tramos, naf_m, B=b, L=b * 10.0, Df=df, es_corrida=True,
                 metodo_exploracion=metodo_exploracion, FS=FS, nu=nu,
-                fr_cdmx_override=fr_cdmx_override, fr_puebla_override=fr_puebla_override
+                fr_cdmx=fr_usar, es_colindante=colindante_flag,
+                se_max_cm=se_max_corrida_cm, factor_margen_se=factor_margen_se
             )
             resultados.append(res_c)
 
         for b in b_aisladas:
             l_ais = round(b * rel_LB_aislada, 2)
-            res_a = evaluar_zapata_dual(
+            res_a = evaluar_zapata_cdmx(
                 df_tramos, naf_m, B=b, L=l_ais, Df=df, es_corrida=False,
                 metodo_exploracion=metodo_exploracion, FS=FS, nu=nu,
-                fr_cdmx_override=fr_cdmx_override, fr_puebla_override=fr_puebla_override
+                fr_cdmx=fr_usar, es_colindante=colindante_flag,
+                se_max_cm=se_max_aislada_cm, factor_margen_se=factor_margen_se
             )
             resultados.append(res_a)
 
@@ -622,17 +699,22 @@ def generar_analisis_parametrico_zapatas(df_tramos, naf_m, df_list, b_corridas, 
         'df_completo': df_res,
         'df_corridas': df_corr,
         'df_aisladas': df_ais,
-        'mat_corr_r_gob_kgcm2': df_corr.pivot(index='Df', columns='B', values='r_gob_kgcm2') if not df_corr.empty else pd.DataFrame(),
-        'mat_corr_qadm_kgcm2': df_corr.pivot(index='Df', columns='B', values='q_adm_kgcm2') if not df_corr.empty else pd.DataFrame(),
-        'mat_corr_se_cm': df_corr.pivot(index='Df', columns='B', values='Se_cm') if not df_corr.empty else pd.DataFrame(),
+        'mat_corr_qrec_kgcm2': df_corr.pivot(index='Df', columns='B', values='q_rec_kgcm2') if not df_corr.empty else pd.DataFrame(),
+        'mat_corr_qcorte_kgcm2': df_corr.pivot(index='Df', columns='B', values='q_adm_corte_kgcm2') if not df_corr.empty else pd.DataFrame(),
+        'mat_corr_se_final_cm': df_corr.pivot(index='Df', columns='B', values='Se_final_cm') if not df_corr.empty else pd.DataFrame(),
         'mat_corr_ks_tm3': df_corr.pivot(index='Df', columns='B', values='ks_ton_m3') if not df_corr.empty else pd.DataFrame(),
-        'mat_ais_r_gob_kgcm2': df_ais.pivot(index='Df', columns='B', values='r_gob_kgcm2') if not df_ais.empty else pd.DataFrame(),
-        'mat_ais_qadm_kgcm2': df_ais.pivot(index='Df', columns='B', values='q_adm_kgcm2') if not df_ais.empty else pd.DataFrame(),
-        'mat_ais_se_cm': df_ais.pivot(index='Df', columns='B', values='Se_cm') if not df_ais.empty else pd.DataFrame(),
+        'mat_ais_qrec_kgcm2': df_ais.pivot(index='Df', columns='B', values='q_rec_kgcm2') if not df_ais.empty else pd.DataFrame(),
+        'mat_ais_qcorte_kgcm2': df_ais.pivot(index='Df', columns='B', values='q_adm_corte_kgcm2') if not df_ais.empty else pd.DataFrame(),
+        'mat_ais_se_final_cm': df_ais.pivot(index='Df', columns='B', values='Se_final_cm') if not df_ais.empty else pd.DataFrame(),
         'mat_ais_ks_tm3': df_ais.pivot(index='Df', columns='B', values='ks_ton_m3') if not df_ais.empty else pd.DataFrame(),
         'metodo_exploracion': metodo_exploracion,
         'rel_LB_aislada': rel_LB_aislada,
         'FS': FS,
         'nu': nu,
+        'fr_cdmx': fr_usar,
+        'es_colindante': colindante_flag,
+        'se_max_corrida_cm': se_max_corrida_cm,
+        'se_max_aislada_cm': se_max_aislada_cm,
+        'factor_margen_se': factor_margen_se,
         'naf_m': naf_m
     }
