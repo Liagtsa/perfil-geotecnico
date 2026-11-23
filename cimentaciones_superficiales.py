@@ -1,6 +1,6 @@
 # ==============================================================================
 # MODULO: cimentaciones_superficiales.py
-# VERSION: 1.0.0-NTC2023-NTCPUEBLA-SPT-PCA
+# VERSION: 1.0.1-NTC2023-NTCPUEBLA-SPT-PCA
 # REVISION NORMATIVA: NTC-CDMX 2023 (Cap. 3.5) & NTC-PUEBLA (Cimentaciones)
 # ==============================================================================
 
@@ -87,6 +87,14 @@ def procesar_datos_superficiales(xls_path_o_bytes, metodo_exploracion="SPT"):
     else:
         df_fuente = df_hum.copy()
 
+    def _get_num(key, default_val):
+        val = df_proy.get(key, default_val)
+        try:
+            fval = float(val)
+            return default_val if pd.isna(fval) else fval
+        except (ValueError, TypeError):
+            return default_val
+
     try:
         naf = float(df_proy.get('NAF', np.nan))
         if pd.isna(naf):
@@ -94,20 +102,20 @@ def procesar_datos_superficiales(xls_path_o_bytes, metodo_exploracion="SPT"):
     except (ValueError, TypeError):
         naf = None
 
-    eficiencia = float(df_proy.get('Eficiencia_SPT', 60.0))
-    diam_barr = float(df_proy.get('Diametro_Barrena_mm', 100.0))
+    eficiencia = _get_num('Eficiencia_SPT', 60.0)
+    diam_barr = _get_num('Diametro_Barrena_mm', 100.0)
     sin_liner = str(df_proy.get('Muestreador_Liner', 'CON_LINER')).upper() == 'SIN_LINER'
 
     config_zap = {
-        'df_min': float(df_proy.get('Zap_Df_Min_m', 1.2)),
-        'df_max': float(df_proy.get('Zap_Df_Max_m', 2.0)),
-        'df_paso': float(df_proy.get('Zap_Df_Paso_m', 0.2)),
-        'bc_min': float(df_proy.get('Zap_Corrida_B_Min_m', 0.6)),
-        'bc_max': float(df_proy.get('Zap_Corrida_B_Max_m', 1.2)),
-        'bc_paso': float(df_proy.get('Zap_Corrida_B_Paso_m', 0.2)),
-        'ba_min': float(df_proy.get('Zap_Aislada_B_Min_m', 1.2)),
-        'ba_max': float(df_proy.get('Zap_Aislada_B_Max_m', 2.0)),
-        'ba_paso': float(df_proy.get('Zap_Aislada_B_Paso_m', 0.2)),
+        'df_min': _get_num('Zap_Df_Min_m', 1.0),
+        'df_max': _get_num('Zap_Df_Max_m', 2.2),
+        'df_paso': _get_num('Zap_Df_Paso_m', 0.2),
+        'bc_min': _get_num('Zap_Corrida_B_Min_m', 0.6),
+        'bc_max': _get_num('Zap_Corrida_B_Max_m', 1.2),
+        'bc_paso': _get_num('Zap_Corrida_B_Paso_m', 0.2),
+        'ba_min': _get_num('Zap_Aislada_B_Min_m', 1.2),
+        'ba_max': _get_num('Zap_Aislada_B_Max_m', 2.4),
+        'ba_paso': _get_num('Zap_Aislada_B_Paso_m', 0.3),
     }
 
     tramos = []
@@ -296,10 +304,14 @@ def _obtener_parametros_bulbo(df_tramos, naf_m, Df, B, es_corrida=False):
         tan_phi_acum += math.tan(math.radians(t['phi_deg'])) * dz
         gamma_nat_acum += t['Gamma'] * dz
         es_inv_acum += (dz / max(t['Es_kPa'], 1000.0))
-        if pd.notna(t['N60']):
-            n60_acum += t['N60'] * dz
-            n1_60_acum += t['N1_60'] * dz
-            cn_acum += t['Cn'] * dz
+
+        n60_val = t['N60'] if ('N60' in t and pd.notna(t['N60'])) else np.nan
+        if pd.notna(n60_val):
+            n1_val = t['N1_60'] if ('N1_60' in t and pd.notna(t['N1_60'])) else n60_val
+            cn_val = t['Cn'] if ('Cn' in t and pd.notna(t['Cn'])) else 1.0
+            n60_acum += float(n60_val) * dz
+            n1_60_acum += float(n1_val) * dz
+            cn_acum += float(cn_val) * dz
             conteo_spt += dz
         peso_total += dz
 
@@ -309,9 +321,9 @@ def _obtener_parametros_bulbo(df_tramos, naf_m, Df, B, es_corrida=False):
         phi_prom = float(ult['phi_deg'])
         gamma_nat = float(ult['Gamma'])
         es_prom = float(ult['Es_kPa'])
-        n60_prom = float(ult['N60']) if pd.notna(ult['N60']) else np.nan
-        n1_60_prom = float(ult['N1_60']) if pd.notna(ult['N1_60']) else np.nan
-        cn_prom = float(ult['Cn']) if pd.notna(ult['Cn']) else np.nan
+        n60_prom = float(ult['N60']) if ('N60' in ult and pd.notna(ult['N60'])) else np.nan
+        n1_60_prom = float(ult['N1_60']) if ('N1_60' in ult and pd.notna(ult['N1_60'])) else np.nan
+        cn_prom = float(ult['Cn']) if ('Cn' in ult and pd.notna(ult['Cn'])) else np.nan
     else:
         c_prom = c_acum / peso_total
         phi_prom = math.degrees(math.atan(tan_phi_acum / peso_total))
@@ -373,7 +385,6 @@ def evaluar_zapata_dual(df_tramos, naf_m, B, L, Df, es_corrida=False,
     gamma_b = bulbo['gamma_cuna']
     Es = bulbo['Es_kPa']
 
-    # Reduccion por falla local en arenas sueltas a medias (NTC-CDMX 3.5.1.2)
     phi_efec = phi
     if phi > 0 and pd.notna(bulbo['N1_60']):
         Dr = min(1.0, math.sqrt(max(bulbo['N1_60'], 1.0) / 60.0))

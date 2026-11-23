@@ -56,7 +56,7 @@ def dibujar_esquema_zapata(fig, Df_rep, B_rep, naf_m, metodo_exp):
     ax1.text(2.9, 0.15, "N.T.N. (±0.00 m)", fontsize=7.5, color='brown', weight='bold', ha='right')
 
     w_dado = min(0.45, B_rep * 0.35)
-    dado = patches.Rectangle((-w_dado / 2, -Df_rep + 0.35), w_dado, Df_rep - 0.35 + 0.35,
+    dado = patches.Rectangle((-w_dado / 2, -Df_rep + 0.35), w_dado, Df_rep,
                              linewidth=1.3, edgecolor='black', facecolor='#d9d9d9', zorder=3)
     zapata = patches.Rectangle((-B_rep / 2, -Df_rep), B_rep, 0.35,
                                linewidth=1.5, edgecolor='black', facecolor='#cccccc', zorder=4)
@@ -131,7 +131,7 @@ def generar_memoria_zapatas_pdf(df_tramos, analisis_zap, p_proy, p_elem, *args, 
 
     def _bloque_texto_caso(r):
         norma_tag = f"[GOBIERNA: {r['norma_gobernante']}]"
-        if r['metodo'].upper() == 'SPT' and pd.notna(r['N1_60']):
+        if r['metodo'].upper() == 'SPT' and pd.notna(r.get('N1_60')):
             param_linea = (
                 f"   - Parámetros SPT en bulbo (h={r['h_bulbo']:.2f}m): "
                 f"N60={r['N60']:.1f}, Cn={r['Cn']:.3f}, (N1)60={r['N1_60']:.1f} | "
@@ -217,7 +217,12 @@ def generar_memoria_zapatas_pdf(df_tramos, analisis_zap, p_proy, p_elem, *args, 
         headers_t2 = ["Prof. (m)", "SUCS", "Tipo", "gamma\n(kN/m³)", "N60 /\n(N1)60", "c\n(kPa)", "phi\n(°)", "Es\n(kPa)"]
         filas_t2 = []
         for _, row in df_sub.iterrows():
-            spt_str = f"{row['N60']:.0f}/{row['N1_60']:.0f}" if pd.notna(row['N60']) else "PCA"
+            has_n60 = ('N60' in row) and pd.notna(row['N60'])
+            if has_n60:
+                n1_v = row['N1_60'] if ('N1_60' in row and pd.notna(row['N1_60'])) else row['N60']
+                spt_str = f"{row['N60']:.0f}/{n1_v:.0f}"
+            else:
+                spt_str = "PCA"
             filas_t2.append([
                 f"{row['Prof_ini']:.2f}-{row['Prof_fin']:.2f}",
                 str(row['SUCS']),
