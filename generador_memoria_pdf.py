@@ -2,6 +2,7 @@ import io
 import os
 import math
 import datetime
+import urllib.request
 import numpy as np
 import pandas as pd
 import matplotlib
@@ -9,21 +10,86 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from matplotlib.backends.backend_pdf import PdfPages
-import matplotlib.image as mpimg
+from PIL import Image
+
+try:
+    import requests
+except ImportError:
+    requests = None
+
+_CACHE_LOGOS_PILAS = {}
+
+def _normalizar_url_imagen(url):
+    u = url.strip()
+    if 'drive.google.com' in u:
+        if '/file/d/' in u:
+            file_id = u.split('/file/d/')[1].split('/')[0].split('?')[0]
+            return f"https://drive.google.com/uc?export=download&id={file_id}"
+        if 'id=' in u:
+            file_id = u.split('id=')[1].split('&')[0]
+            return f"https://drive.google.com/uc?export=download&id={file_id}"
+    if 'dropbox.com' in u:
+        if '?dl=0' in u:
+            return u.replace('?dl=0', '?raw=1')
+        if '&dl=0' in u:
+            return u.replace('&dl=0', '&raw=1')
+    if 'github.com/' in u and '/blob/' in u:
+        return u.replace('github.com/', 'raw.githubusercontent.com/').replace('/blob/', '/')
+    return u
+
+def cargar_imagen_logo(logo_source):
+    key = str(logo_source).strip() if (logo_source is not None and not pd.isna(logo_source)) else ''
+    if key.lower() in ('', 'nan', 'none', 'null'):
+        key = 'logo_empresa.png'
+    if key in _CACHE_LOGOS_PILAS:
+        return _CACHE_LOGOS_PILAS[key]
+
+    candidatos = [key]
+    if key != 'logo_empresa.png':
+        candidatos.append('logo_empresa.png')
+
+    headers_http = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+
+    for src in candidatos:
+        if not src:
+            continue
+        if src.lower().startswith(('http://', 'https://')):
+            url_directa = _normalizar_url_imagen(src)
+            try:
+                if requests is not None:
+                    resp = requests.get(url_directa, headers=headers_http, timeout=8)
+                    resp.raise_for_status()
+                    raw_bytes = resp.content
+                else:
+                    req = urllib.request.Request(url_directa, headers=headers_http)
+                    with urllib.request.urlopen(req, timeout=8) as resp:
+                        raw_bytes = resp.read()
+                arr = np.asarray(Image.open(io.BytesIO(raw_bytes)).convert('RGBA'))
+                _CACHE_LOGOS_PILAS[key] = arr
+                return arr
+            except Exception:
+                continue
+        if os.path.exists(src):
+            try:
+                arr = np.asarray(Image.open(src).convert('RGBA'))
+                _CACHE_LOGOS_PILAS[key] = arr
+                return arr
+            except Exception:
+                continue
+
+    _CACHE_LOGOS_PILAS[key] = None
+    return None
 
 # ==========================================================
 # 1. ENCABEZADO Y MEMBRETE EJECUTIVO
 # ==========================================================
-def crear_encabezado_memoria(fig, titulo_pagina, num_pagina, total_paginas, p_proy, p_elem, p_sondeo, p_fecha):
+def crear_encabezado_memoria(fig, titulo_pagina, num_pagina, total_paginas, p_proy, p_elem, p_sondeo, p_fecha, logo_url='logo_empresa.png'):
     ax_logo = fig.add_axes([0.05, 0.88, 0.22, 0.08])
     ax_logo.axis('off')
     
-    ruta_logo = 'logo_empresa.png'
-    if os.path.exists(ruta_logo):
-        try:
-            ax_logo.imshow(mpimg.imread(ruta_logo), aspect='equal')
-        except Exception:
-            ax_logo.text(0.5, 0.5, '[ LOGO EMPRESA ]', ha='center', va='center', fontsize=8, color='navy', weight='bold')
+    img_arr = cargar_imagen_logo(logo_url)
+    if img_arr is not None:
+        ax_logo.imshow(img_arr, aspect='equal')
     else:
         ax_logo.text(0.5, 0.5, '[ LOGO EMPRESA ]', ha='center', va='center', fontsize=8, color='navy', weight='bold')
     

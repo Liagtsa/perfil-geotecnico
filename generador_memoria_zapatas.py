@@ -2,6 +2,7 @@ import io
 import os
 import math
 import datetime
+import urllib.request
 import numpy as np
 import pandas as pd
 import matplotlib
@@ -9,22 +10,104 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from matplotlib.backends.backend_pdf import PdfPages
-import matplotlib.image as mpimg
+from PIL import Image
+
+try:
+    import requests
+except ImportError:
+    requests = None
+
+
+# ==========================================================
+# 0. UTILIDAD DE CARGA DE LOGO (URL REMOTA O ARCHIVO LOCAL)
+# ==========================================================
+_CACHE_LOGOS = {}
+
+def _normalizar_url_imagen(url):
+    """Convierte enlaces compartidos (Google Drive, Dropbox, GitHub) en enlaces de descarga directa."""
+    u = url.strip()
+    if 'drive.google.com' in u:
+        if '/file/d/' in u:
+            file_id = u.split('/file/d/')[1].split('/')[0].split('?')[0]
+            return f"https://drive.google.com/uc?export=download&id={file_id}"
+        if 'id=' in u:
+            file_id = u.split('id=')[1].split('&')[0]
+            return f"https://drive.google.com/uc?export=download&id={file_id}"
+    if 'dropbox.com' in u:
+        if '?dl=0' in u:
+            return u.replace('?dl=0', '?raw=1')
+        if '&dl=0' in u:
+            return u.replace('&dl=0', '&raw=1')
+    if 'github.com/' in u and '/blob/' in u:
+        return u.replace('github.com/', 'raw.githubusercontent.com/').replace('/blob/', '/')
+    return u
+
+def cargar_imagen_logo(logo_source):
+    """
+    Carga una imagen de logotipo desde:
+      1. Una URL web (http:// o https://, incluyendo Google Drive, Dropbox y GitHub).
+      2. Una ruta de archivo local especificada en LogoURL.
+      3. Respaldo automatico a 'logo_empresa.png'.
+    Cachea el resultado en memoria para evitar descargas repetidas por pagina.
+    """
+    key = str(logo_source).strip() if (logo_source is not None and not pd.isna(logo_source)) else ''
+    if key.lower() in ('', 'nan', 'none', 'null'):
+        key = 'logo_empresa.png'
+
+    if key in _CACHE_LOGOS:
+        return _CACHE_LOGOS[key]
+
+    candidatos = [key]
+    if key != 'logo_empresa.png':
+        candidatos.append('logo_empresa.png')
+
+    headers_http = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+
+    for src in candidatos:
+        if not src:
+            continue
+        if src.lower().startswith(('http://', 'https://')):
+            url_directa = _normalizar_url_imagen(src)
+            try:
+                if requests is not None:
+                    resp = requests.get(url_directa, headers=headers_http, timeout=8)
+                    resp.raise_for_status()
+                    raw_bytes = resp.content
+                else:
+                    req = urllib.request.Request(url_directa, headers=headers_http)
+                    with urllib.request.urlopen(req, timeout=8) as resp:
+                        raw_bytes = resp.read()
+                pil_img = Image.open(io.BytesIO(raw_bytes)).convert('RGBA')
+                arr = np.asarray(pil_img)
+                _CACHE_LOGOS[key] = arr
+                return arr
+            except Exception:
+                continue
+
+        if os.path.exists(src):
+            try:
+                pil_img = Image.open(src).convert('RGBA')
+                arr = np.asarray(pil_img)
+                _CACHE_LOGOS[key] = arr
+                return arr
+            except Exception:
+                continue
+
+    _CACHE_LOGOS[key] = None
+    return None
 
 
 # ==========================================================
 # 1. ENCABEZADO Y MEMBRETE EJECUTIVO (CONFORME A PRODUCCIÓN)
 # ==========================================================
-def crear_encabezado_memoria_zapata(fig, titulo_pagina, num_pagina, total_paginas, p_proy, p_elem, p_sondeo, p_fecha):
+def crear_encabezado_memoria_zapata(fig, titulo_pagina, num_pagina, total_paginas,
+                                    p_proy, p_elem, p_sondeo, p_fecha, logo_url='logo_empresa.png'):
     ax_logo = fig.add_axes([0.05, 0.88, 0.22, 0.08])
     ax_logo.axis('off')
 
-    ruta_logo = 'logo_empresa.png'
-    if os.path.exists(ruta_logo):
-        try:
-            ax_logo.imshow(mpimg.imread(ruta_logo), aspect='equal')
-        except Exception:
-            ax_logo.text(0.5, 0.5, '[ LOGO EMPRESA ]', ha='center', va='center', fontsize=8, color='navy', weight='bold')
+    img_arr = cargar_imagen_logo(logo_url)
+    if img_arr is not None:
+        ax_logo.imshow(img_arr, aspect='equal')
     else:
         ax_logo.text(0.5, 0.5, '[ LOGO EMPRESA ]', ha='center', va='center', fontsize=8, color='navy', weight='bold')
 
@@ -33,7 +116,7 @@ def crear_encabezado_memoria_zapata(fig, titulo_pagina, num_pagina, total_pagina
     fig.text(0.30, 0.904, f"EXPLORACIÓN: {p_sondeo}", fontsize=8.5)
     fig.text(0.30, 0.884, f"MEMORIA TÉCNICA: {titulo_pagina}", fontsize=8.0, color='dimgray')
 
-    if not p_fecha:
+    if not p_fecha or str(p_fecha).strip().lower() == 'nan':
         p_fecha = datetime.datetime.now().strftime("%B %Y").upper()
     fig.text(0.95, 0.940, f"FECHA: {p_fecha}", ha='right', fontsize=8.5)
     fig.text(0.95, 0.904, f"PÁGINA: {num_pagina} / {total_paginas}", ha='right', fontsize=9, weight='bold')
@@ -119,6 +202,8 @@ def generar_memoria_zapatas_pdf(df_tramos, analisis_zap, p_proy, p_elem, *args, 
         p_sondeo = str(kwargs.get('p_sondeo', 'SONDEO / PCA'))
         p_fecha = str(kwargs.get('p_fecha', ''))
 
+    logo_url = kwargs.get('logo_url', 'logo_empresa.png')
+
     pdf_buffer = io.BytesIO()
 
     df_res = analisis_zap['df_completo']
@@ -185,16 +270,104 @@ def generar_memoria_zapatas_pdf(df_tramos, analisis_zap, p_proy, p_elem, *args, 
     pags_corr = _paginar(textos_corr, 4)
     pags_ais = _paginar(textos_ais, 4)
 
-    total_paginas = 1 + 1 + 1 + len(pags_corr) + len(pags_ais) + 1 + 1
+    # Paginacion dinamica de estratos
+    FILAS_ESTRATOS_PAG = 32
+    bloques_estratos = [df_tramos.iloc[i:i + FILAS_ESTRATOS_PAG] for i in range(0, max(1, len(df_tramos)), FILAS_ESTRATOS_PAG)]
+
+    # Paginacion dinamica de TODAS las zapatas analizadas en las tablas resumen (sin recortar filas)
+    MAX_FILAS_TABLA_PAG = 24
+    MAX_FILAS_CON_DICTAMEN = 20
+
+    modo_compacto_una_hoja = (not df_corr.empty or not df_ais.empty) and (len(df_corr) <= 9 and len(df_ais) <= 9)
+
+    if modo_compacto_una_hoja:
+        num_pags_resumen = 1
+        dictamen_en_hoja_aparte = False
+    else:
+        bloques_tabla_corr = [df_corr.iloc[i:i + MAX_FILAS_TABLA_PAG] for i in range(0, len(df_corr), MAX_FILAS_TABLA_PAG)] if not df_corr.empty else []
+        bloques_tabla_ais = [df_ais.iloc[i:i + MAX_FILAS_TABLA_PAG] for i in range(0, len(df_ais), MAX_FILAS_TABLA_PAG)] if not df_ais.empty else []
+        todos_bloques = bloques_tabla_corr + bloques_tabla_ais
+        if not todos_bloques:
+            num_pags_resumen = 1
+            dictamen_en_hoja_aparte = False
+        else:
+            ult_len = len(todos_bloques[-1])
+            dictamen_en_hoja_aparte = (ult_len > MAX_FILAS_CON_DICTAMEN)
+            num_pags_resumen = len(todos_bloques) + (1 if dictamen_en_hoja_aparte else 0)
+
+    total_paginas = 1 + len(bloques_estratos) + 1 + len(pags_corr) + len(pags_ais) + 1 + num_pags_resumen
+
+    cols_res = [
+        "Df\n(m)", "B\n(m)", "Modelo\nSuelo", "q_corte\n(kg/cm²)", "Se_corte\n(mm)",
+        "q_def\n(kg/cm²)", "Criterio\nGobernante", "q_rec\n(kg/cm²)", "Se_rec\n(mm)", "ks\n(t/m³)"
+    ]
+    anchos_cols_res = [0.06, 0.06, 0.11, 0.09, 0.09, 0.09, 0.20, 0.09, 0.09, 0.12]
+
+    def _cortar_modelo(m_txt):
+        return "Cohesivo" if "Cohesiv" in str(m_txt) else "Friccionante"
+
+    def _armar_filas_resumen(df_chunk):
+        return [[
+            f"{r['Df']:.2f}", f"{r['B']:.2f}", _cortar_modelo(r.get('modelo_suelo_aplicado', '')),
+            f"{r['q_adm_corte_kgcm2']:.2f}", f"{r['Se_corte_mm']:.1f}",
+            f"{r['q_adm_def_kgcm2']:.2f}", r['criterio_gobernante'], f"{r['q_rec_kgcm2']:.2f}",
+            f"{r['Se_final_mm']:.1f}", f"{r['ks_ton_m3']:.0f}"
+        ] for _, r in df_chunk.iterrows()]
+
+    def _dibujar_tabla_en_caja(fig, df_chunk, y_top, max_h_disp, color_header):
+        n_f = len(df_chunk)
+        h_ideal = (n_f + 1.45) * 0.0255
+        h_caja = min(max_h_disp, h_ideal)
+        ax_t = fig.add_axes([0.05, y_top - h_caja, 0.90, h_caja])
+        ax_t.axis('off')
+
+        filas_txt = _armar_filas_resumen(df_chunk)
+        tabla = ax_t.table(
+            cellText=[cols_res] + filas_txt,
+            bbox=[0.0, 0.0, 1.0, 1.0],
+            cellLoc='center',
+            colWidths=anchos_cols_res
+        )
+        tabla.auto_set_font_size(False)
+        tabla.set_fontsize(6.8 if n_f > 20 else 7.2)
+
+        total_unidades = n_f + 1.45
+        h_header_rel = 1.45 / total_unidades
+        h_fila_rel = 1.0 / total_unidades
+
+        for (r_idx, c_idx), cell in tabla.get_celld().items():
+            cell.set_linewidth(0.5)
+            if r_idx == 0:
+                cell.set_height(h_header_rel)
+                cell.set_facecolor(color_header)
+                cell.set_text_props(color='white', weight='bold')
+            else:
+                cell.set_height(h_fila_rel)
+                if r_idx % 2 == 0:
+                    cell.set_facecolor('#f4f4f4')
+        return y_top - h_caja
+
+    q_min_g = df_res['q_rec_kgcm2'].min() if not df_res.empty else 0.0
+    q_max_g = df_res['q_rec_kgcm2'].max() if not df_res.empty else 0.0
+    se_max_g = df_res['Se_final_mm'].max() if not df_res.empty else 0.0
+
+    nota_dictamen = (
+        f"DICTAMEN GEOTÉCNICO Y RECOMENDACIONES DE DISEÑO (NTC-CDMX 2023 | {ubicacion_lbl}):\n"
+        f"1. Se evaluaron las ecuaciones separadas de las NTC-CDMX 2023 (Num. 3.5.1) y el control de servicio ({margen_pct:.0f}% de Se_máx).\n"
+        f"2. Las capacidades recomendadas gobernantes (q_rec) oscilan entre {q_min_g:.2f} y {q_max_g:.2f} kg/cm², acotando\n"
+        f"   la deformación elástica esperada a un máximo de {se_max_g:.1f} mm dentro del margen normativo.\n"
+        f"3. Se recomienda desplante sobre terreno natural firme libre de rellenos, con plantilla de concreto f'c = 100 kg/cm²."
+    )
 
     with PdfPages(pdf_buffer) as pdf:
         contador = 1
 
         # --------------------------------------------------------
-        # PÁGINA 1: METODOLOGÍA NORMATIVA NTC-CDMX 2023 (FALLA VS SERVICIO)
+        # PÁGINA 1: METODOLOGÍA NORMATIVA NTC-CDMX 2023
         # --------------------------------------------------------
         fig = plt.figure(figsize=(8.5, 11))
-        crear_encabezado_memoria_zapata(fig, "METODOLOGÍA Y CRITERIOS NORMATIVOS (NTC-CDMX 2023)", contador, total_paginas, p_proy, p_elem, p_sondeo, p_fecha)
+        crear_encabezado_memoria_zapata(fig, "METODOLOGÍA Y CRITERIOS NORMATIVOS (NTC-CDMX 2023)",
+                                        contador, total_paginas, p_proy, p_elem, p_sondeo, p_fecha, logo_url=logo_url)
         texto_pg1 = (
             "1. METODOLOGÍA DE CÁLCULO DE CIMENTACIONES SUPERFICIALES\n"
             "   (NORMA TÉCNICA COMPLEMENTARIA NTC-CDMX 2023 — NUMERAL 3.5.1)\n"
@@ -216,7 +389,7 @@ def generar_memoria_zapatas_pdf(df_tramos, analisis_zap, p_proy, p_elem, *args, 
             "     fq = 1 + (B/L)*tan(phi), fg = 1 - 0.4*(B/L).\n"
             f"   - Criterio Aplicado: {criterio_suelo} | FR = {fr_val:.2f} [{ubicacion_lbl}] | FS Corte = {FS_val:.1f}.\n\n"
             "C. ESTADO LÍMITE DE SERVICIO Y CAPACIDAD DE CARGA RECOMENDADA (q_rec)\n"
-            f"   - Se evalúa la deformación elástica que produciría la carga por corte: Se_corte = q_neta·B·(1-nu²)·If / Es_sec.\n"
+            "   - Se evalúa la deformación elástica que produciría la carga por corte: Se_corte = q_neta·B·(1-nu²)·If / Es_sec.\n"
             f"   - Para evitar asentamientos excesivos, se fija una deformación objetivo al {margen_pct:.0f}% del límite máximo\n"
             f"     permitido (Se_máx = {se_max_ais*10:.0f} mm en zapatas aisladas; {se_max_corr*10:.0f} mm en zapatas corridas):\n"
             "       Se_obj = (Margen %) * Se_máx   =>   q_adm_def = [Se_obj * Es_sec / (B * (1 - nu²) * If)] + pv\n"
@@ -226,63 +399,71 @@ def generar_memoria_zapatas_pdf(df_tramos, analisis_zap, p_proy, p_elem, *args, 
         pdf.savefig(fig); plt.close(); contador += 1
 
         # --------------------------------------------------------
-        # PÁGINA 2: PERFIL ESTRATIGRÁFICO / PARÁMETROS DE DISEÑO
+        # PÁGINA(S) 2: PERFIL ESTRATIGRÁFICO / PARÁMETROS DE DISEÑO
         # --------------------------------------------------------
-        fig = plt.figure(figsize=(8.5, 11))
-        crear_encabezado_memoria_zapata(fig, f"PERFIL GEOTÉCNICO Y PARÁMETROS ({metodo_exp.upper()})", contador, total_paginas, p_proy, p_elem, p_sondeo, p_fecha)
-        sub_t2 = (
-            f"2. PERFIL ESTRATIGRÁFICO Y PARÁMETROS MECÁNICOS DE DISEÑO ({metodo_exp.upper()})\n"
-            f"====================================================================================\n"
-        )
-        fig.text(0.08, 0.84, sub_t2, va='top', ha='left', fontsize=8.0, family='monospace')
+        for idx_est, df_sub in enumerate(bloques_estratos):
+            fig = plt.figure(figsize=(8.5, 11))
+            suf_est = f" (Parte {idx_est + 1}/{len(bloques_estratos)})" if len(bloques_estratos) > 1 else ""
+            crear_encabezado_memoria_zapata(fig, f"PERFIL GEOTÉCNICO Y PARÁMETROS ({metodo_exp.upper()}){suf_est}",
+                                            contador, total_paginas, p_proy, p_elem, p_sondeo, p_fecha, logo_url=logo_url)
+            sub_t2 = (
+                f"2. PERFIL ESTRATIGRÁFICO Y PARÁMETROS MECÁNICOS DE DISEÑO ({metodo_exp.upper()}){suf_est}\n"
+                f"====================================================================================\n"
+            )
+            fig.text(0.08, 0.84, sub_t2, va='top', ha='left', fontsize=8.0, family='monospace')
 
-        ax_t2 = fig.add_axes([0.06, 0.08, 0.88, 0.72])
-        ax_t2.axis('off')
+            headers_t2 = ["Prof. (m)", "SUCS", "Modelo Estrato", "gamma\n(kN/m³)", "N60 /\n(N1)60", "c\n(kPa)", "phi\n(°)", "Es sec.\n(kPa)"]
+            filas_t2 = []
+            for _, row in df_sub.iterrows():
+                has_n60 = ('N60' in row) and pd.notna(row['N60'])
+                if has_n60:
+                    n1_v = row['N1_60'] if ('N1_60' in row and pd.notna(row['N1_60'])) else row['N60']
+                    spt_str = f"{row['N60']:.0f}/{n1_v:.0f}"
+                else:
+                    spt_str = "PCA"
+                tipo_lbl = str(row['Tipo'])
+                if tipo_lbl.startswith('Dual'):
+                    tipo_lbl = "Dual (c vs phi)"
+                filas_t2.append([
+                    f"{row['Prof_ini']:.2f}-{row['Prof_fin']:.2f}",
+                    str(row['SUCS']),
+                    tipo_lbl[:16],
+                    f"{row['Gamma']:.2f}",
+                    spt_str,
+                    f"{row['c_kPa']:.1f}",
+                    f"{row['phi_deg']:.1f}°",
+                    f"{row['Es_kPa']:.0f}"
+                ])
 
-        df_sub = df_tramos.head(38)
-        headers_t2 = ["Prof. (m)", "SUCS", "Modelo Estrato", "gamma\n(kN/m³)", "N60 /\n(N1)60", "c\n(kPa)", "phi\n(°)", "Es sec.\n(kPa)"]
-        filas_t2 = []
-        for _, row in df_sub.iterrows():
-            has_n60 = ('N60' in row) and pd.notna(row['N60'])
-            if has_n60:
-                n1_v = row['N1_60'] if ('N1_60' in row and pd.notna(row['N1_60'])) else row['N60']
-                spt_str = f"{row['N60']:.0f}/{n1_v:.0f}"
-            else:
-                spt_str = "PCA"
-            tipo_lbl = str(row['Tipo'])
-            if tipo_lbl.startswith('Dual'):
-                tipo_lbl = "Dual (c vs phi)"
-            filas_t2.append([
-                f"{row['Prof_ini']:.2f}-{row['Prof_fin']:.2f}",
-                str(row['SUCS']),
-                tipo_lbl[:16],
-                f"{row['Gamma']:.2f}",
-                spt_str,
-                f"{row['c_kPa']:.1f}",
-                f"{row['phi_deg']:.1f}°",
-                f"{row['Es_kPa']:.0f}"
-            ])
+            n_e = len(filas_t2)
+            h_est_box = min(0.72, (n_e + 1.5) * 0.026)
+            ax_t2 = fig.add_axes([0.06, 0.80 - h_est_box, 0.88, h_est_box])
+            ax_t2.axis('off')
 
-        tab2 = ax_t2.table(cellText=[headers_t2] + filas_t2, loc='center', cellLoc='center',
-                           colWidths=[0.14, 0.08, 0.21, 0.11, 0.12, 0.10, 0.10, 0.14])
-        tab2.auto_set_font_size(False)
-        tab2.set_fontsize(7.2 if len(filas_t2) > 25 else 8.0)
-        tab2.scale(1, 1.15 if len(filas_t2) > 25 else 1.35)
-        for j in range(len(headers_t2)):
-            tab2[0, j].set_facecolor('navy')
-            tab2[0, j].set_text_props(color='white', weight='bold')
-        for r_i in range(1, len(filas_t2) + 1):
-            if r_i % 2 == 0:
-                for c_i in range(len(headers_t2)):
-                    tab2[r_i, c_i].set_facecolor('#f4f4f4')
+            tab2 = ax_t2.table(
+                cellText=[headers_t2] + filas_t2,
+                bbox=[0.0, 0.0, 1.0, 1.0],
+                cellLoc='center',
+                colWidths=[0.14, 0.08, 0.21, 0.11, 0.12, 0.10, 0.10, 0.14]
+            )
+            tab2.auto_set_font_size(False)
+            tab2.set_fontsize(7.2 if n_e > 24 else 7.8)
+            for (r_i, c_i), cell in tab2.get_celld().items():
+                cell.set_linewidth(0.5)
+                if r_i == 0:
+                    cell.set_facecolor('navy')
+                    cell.set_text_props(color='white', weight='bold')
+                elif r_i % 2 == 0:
+                    cell.set_facecolor('#f4f4f4')
 
-        pdf.savefig(fig); plt.close(); contador += 1
+            pdf.savefig(fig); plt.close(); contador += 1
 
         # --------------------------------------------------------
         # PÁGINA 3: ESQUEMA PARAMÉTRICO Y MODELO WINKLER
         # --------------------------------------------------------
         fig = plt.figure(figsize=(8.5, 11))
-        crear_encabezado_memoria_zapata(fig, "ESQUEMA PARAMÉTRICO Y BULBO DE PRESIONES", contador, total_paginas, p_proy, p_elem, p_sondeo, p_fecha)
+        crear_encabezado_memoria_zapata(fig, "ESQUEMA PARAMÉTRICO Y BULBO DE PRESIONES",
+                                        contador, total_paginas, p_proy, p_elem, p_sondeo, p_fecha, logo_url=logo_url)
         df_rep = float(df_res['Df'].median()) if not df_res.empty else 1.5
         b_rep = float(df_res['B'].median()) if not df_res.empty else 1.2
         dibujar_esquema_zapata(fig, df_rep, b_rep, naf_m, metodo_exp, ubicacion_lbl, margen_pct)
@@ -309,7 +490,7 @@ def generar_memoria_zapatas_pdf(df_tramos, analisis_zap, p_proy, p_elem, *args, 
         for idx_p, pag_txt in enumerate(pags_corr):
             fig = plt.figure(figsize=(8.5, 11))
             crear_encabezado_memoria_zapata(fig, f"DESGLOSE ANALÍTICO — ZAPATAS CORRIDAS (Parte {idx_p + 1})",
-                                            contador, total_paginas, p_proy, p_elem, p_sondeo, p_fecha)
+                                            contador, total_paginas, p_proy, p_elem, p_sondeo, p_fecha, logo_url=logo_url)
             tit_c = (
                 f"3. MEMORIA DE CÁLCULO DETALLADA — ZAPATAS CORRIDAS (Parte {idx_p + 1} de {len(pags_corr)})\n"
                 f"====================================================================================\n\n"
@@ -323,7 +504,7 @@ def generar_memoria_zapatas_pdf(df_tramos, analisis_zap, p_proy, p_elem, *args, 
         for idx_p, pag_txt in enumerate(pags_ais):
             fig = plt.figure(figsize=(8.5, 11))
             crear_encabezado_memoria_zapata(fig, f"DESGLOSE ANALÍTICO — ZAPATAS AISLADAS (Parte {idx_p + 1})",
-                                            contador, total_paginas, p_proy, p_elem, p_sondeo, p_fecha)
+                                            contador, total_paginas, p_proy, p_elem, p_sondeo, p_fecha, logo_url=logo_url)
             tit_a = (
                 f"4. MEMORIA DE CÁLCULO DETALLADA — ZAPATAS AISLADAS (Parte {idx_p + 1} de {len(pags_ais)})\n"
                 f"====================================================================================\n\n"
@@ -332,11 +513,11 @@ def generar_memoria_zapatas_pdf(df_tramos, analisis_zap, p_proy, p_elem, *args, 
             pdf.savefig(fig); plt.close(); contador += 1
 
         # --------------------------------------------------------
-        # PÁGINA DE GRÁFICAS COMPARATIVAS (CORTE VS RECOMENDADA Y DEFORMACIONES)
+        # PÁGINA DE GRÁFICAS COMPARATIVAS
         # --------------------------------------------------------
         fig = plt.figure(figsize=(8.5, 11))
         crear_encabezado_memoria_zapata(fig, "GRÁFICAS DE CAPACIDAD RECOMENDADA Y DEFORMACIONES",
-                                        contador, total_paginas, p_proy, p_elem, p_sondeo, p_fecha)
+                                        contador, total_paginas, p_proy, p_elem, p_sondeo, p_fecha, logo_url=logo_url)
 
         ax_g1 = fig.add_axes([0.10, 0.50, 0.37, 0.30])
         if not df_corr.empty:
@@ -346,7 +527,7 @@ def generar_memoria_zapatas_pdf(df_tramos, analisis_zap, p_proy, p_elem, *args, 
         ax_g1.set_xlabel("Profundidad Df (m)", fontsize=8)
         ax_g1.set_ylabel("q_rec (kg/cm²)", fontsize=8)
         ax_g1.grid(True, linestyle='--', alpha=0.6)
-        ax_g1.legend(fontsize=7)
+        ax_g1.legend(fontsize=6.8)
 
         ax_g2 = fig.add_axes([0.56, 0.50, 0.37, 0.30])
         if not df_ais.empty:
@@ -356,95 +537,104 @@ def generar_memoria_zapatas_pdf(df_tramos, analisis_zap, p_proy, p_elem, *args, 
         ax_g2.set_xlabel("Profundidad Df (m)", fontsize=8)
         ax_g2.set_ylabel("q_rec (kg/cm²)", fontsize=8)
         ax_g2.grid(True, linestyle='--', alpha=0.6)
-        ax_g2.legend(fontsize=7)
+        ax_g2.legend(fontsize=6.8, ncol=2 if df_ais['B'].nunique() > 5 else 1)
 
         ax_g3 = fig.add_axes([0.10, 0.10, 0.37, 0.30])
         if not df_corr.empty:
             for b_val, grp in df_corr.groupby('B'):
-                ax_g3.plot(grp['Df'], grp['Se_corte_mm'], marker='o', linestyle='--', alpha=0.65, lw=1.3, label=f"Se_corte B={b_val:.2f}m")
+                ax_g3.plot(grp['Df'], grp['Se_corte_mm'], marker='o', linestyle='--', alpha=0.65, lw=1.3, label=f"B={b_val:.2f}m")
             ax_g3.axhline(se_max_corr * 10.0, color='red', linestyle='-', lw=1.2, label=f"Lím. {se_max_corr*10:.0f} mm")
             ax_g3.axhline(se_max_corr * 10.0 * (margen_pct / 100.0), color='green', linestyle='-.', lw=1.2, label=f"Obj. {margen_pct:.0f}%")
         ax_g3.set_title("Corridas: Deformación Corte vs. Límite (mm)", fontsize=8.3, weight='bold')
         ax_g3.set_xlabel("Profundidad Df (m)", fontsize=8)
         ax_g3.set_ylabel("Deformación Se (mm)", fontsize=8)
         ax_g3.grid(True, linestyle='--', alpha=0.6)
-        ax_g3.legend(fontsize=6.5)
+        ax_g3.legend(fontsize=6.2)
 
         ax_g4 = fig.add_axes([0.56, 0.10, 0.37, 0.30])
         if not df_ais.empty:
             for b_val, grp in df_ais.groupby('B'):
-                ax_g4.plot(grp['Df'], grp['Se_corte_mm'], marker='s', linestyle='--', alpha=0.65, lw=1.3, label=f"Se_corte B={b_val:.2f}m")
+                ax_g4.plot(grp['Df'], grp['Se_corte_mm'], marker='s', linestyle='--', alpha=0.65, lw=1.3, label=f"B={b_val:.2f}m")
             ax_g4.axhline(se_max_ais * 10.0, color='red', linestyle='-', lw=1.2, label=f"Lím. {se_max_ais*10:.0f} mm")
             ax_g4.axhline(se_max_ais * 10.0 * (margen_pct / 100.0), color='green', linestyle='-.', lw=1.2, label=f"Obj. {margen_pct:.0f}%")
         ax_g4.set_title("Aisladas: Deformación Corte vs. Límite (mm)", fontsize=8.3, weight='bold')
         ax_g4.set_xlabel("Profundidad Df (m)", fontsize=8)
         ax_g4.set_ylabel("Deformación Se (mm)", fontsize=8)
         ax_g4.grid(True, linestyle='--', alpha=0.6)
-        ax_g4.legend(fontsize=6.5)
+        ax_g4.legend(fontsize=6.0, ncol=2 if df_ais['B'].nunique() > 5 else 1)
 
         pdf.savefig(fig); plt.close(); contador += 1
 
         # --------------------------------------------------------
-        # PÁGINA FINAL: TABLAS RESUMEN Y DICTAMEN GEOTÉCNICO
+        # PÁGINA(S) FINAL(ES): TABLAS RESUMEN COMPLETAS + DICTAMEN
         # --------------------------------------------------------
-        fig = plt.figure(figsize=(8.5, 11))
-        crear_encabezado_memoria_zapata(fig, "RESUMEN DE DISEÑO (FALLA VS. DEFORMACIÓN) Y DICTAMEN",
-                                        contador, total_paginas, p_proy, p_elem, p_sondeo, p_fecha)
+        if modo_compacto_una_hoja:
+            fig = plt.figure(figsize=(8.5, 11))
+            crear_encabezado_memoria_zapata(fig, "RESUMEN DE DISEÑO (FALLA VS. DEFORMACIÓN) Y DICTAMEN",
+                                            contador, total_paginas, p_proy, p_elem, p_sondeo, p_fecha, logo_url=logo_url)
+            y_cursor = 0.84
+            if not df_corr.empty:
+                fig.text(0.05, y_cursor, f"A. RESUMEN DE DISEÑO — ZAPATAS CORRIDAS [{ubicacion_lbl}] ({len(df_corr)} casos)",
+                         fontsize=8.2, weight='bold', color='navy')
+                y_cursor = _dibujar_tabla_en_caja(fig, df_corr, y_cursor - 0.015, 0.30, 'navy') - 0.035
 
-        cols_res = ["Df\n(m)", "B\n(m)", "Modelo\nSuelo", "q_corte\n(kg/cm²)", "Se_corte\n(mm)", "q_def\n(kg/cm²)", "Criterio\nGobernante", "q_rec\n(kg/cm²)", "Se_rec\n(mm)", "ks\n(t/m³)"]
+            if not df_ais.empty:
+                fig.text(0.05, y_cursor, f"B. RESUMEN DE DISEÑO — ZAPATAS AISLADAS [{ubicacion_lbl}] ({len(df_ais)} casos)",
+                         fontsize=8.2, weight='bold', color='#7030a0')
+                _dibujar_tabla_en_caja(fig, df_ais, y_cursor - 0.015, 0.30, '#7030a0')
 
-        def _cortar_modelo(m_txt):
-            return "Cohesivo" if "Cohesiv" in str(m_txt) else "Friccionante"
+            fig.text(0.05, 0.04, nota_dictamen, fontsize=7.4, style='italic', weight='bold', color='darkgreen')
+            pdf.savefig(fig); plt.close(); contador += 1
+        else:
+            secuencia_tablas = []
+            for idx_c, b_c in enumerate(bloques_tabla_corr):
+                suf_c = f" (Parte {idx_c + 1} de {len(bloques_tabla_corr)})" if len(bloques_tabla_corr) > 1 else ""
+                secuencia_tablas.append((
+                    b_c,
+                    f"A. RESUMEN DE DISEÑO — ZAPATAS CORRIDAS [NTC-CDMX 2023 | {ubicacion_lbl}]{suf_c} — Total: {len(df_corr)} casos",
+                    'navy'
+                ))
+            for idx_a, b_a in enumerate(bloques_tabla_ais):
+                suf_a = f" (Parte {idx_a + 1} de {len(bloques_tabla_ais)})" if len(bloques_tabla_ais) > 1 else ""
+                secuencia_tablas.append((
+                    b_a,
+                    f"B. RESUMEN DE DISEÑO — ZAPATAS AISLADAS [NTC-CDMX 2023 | {ubicacion_lbl}]{suf_a} — Total: {len(df_ais)} casos",
+                    '#7030a0'
+                ))
 
-        fig.text(0.05, 0.84, f"A. RESUMEN DE DISEÑO — ZAPATAS CORRIDAS [NTC-CDMX 2023 | {ubicacion_lbl}]", fontsize=8.2, weight='bold', color='navy')
-        ax_m1 = fig.add_axes([0.05, 0.53, 0.90, 0.29]); ax_m1.axis('off')
-        if not df_corr.empty:
-            rows_c = [[
-                f"{r['Df']:.2f}", f"{r['B']:.2f}", _cortar_modelo(r.get('modelo_suelo_aplicado', '')),
-                f"{r['q_adm_corte_kgcm2']:.2f}", f"{r['Se_corte_mm']:.1f}",
-                f"{r['q_adm_def_kgcm2']:.2f}", r['criterio_gobernante'], f"{r['q_rec_kgcm2']:.2f}",
-                f"{r['Se_final_mm']:.1f}", f"{r['ks_ton_m3']:.0f}"
-            ] for _, r in df_corr.head(14).iterrows()]
-            t1 = ax_m1.table(cellText=[cols_res] + rows_c, loc='center', cellLoc='center',
-                             colWidths=[0.06, 0.06, 0.11, 0.09, 0.09, 0.09, 0.20, 0.09, 0.09, 0.12])
-            t1.auto_set_font_size(False); t1.set_fontsize(6.8); t1.scale(1, 1.18)
-            for j in range(len(cols_res)):
-                t1[0, j].set_facecolor('navy'); t1[0, j].set_text_props(color='white', weight='bold')
-            for ri in range(1, len(rows_c) + 1):
-                if ri % 2 == 0:
-                    for ci in range(len(cols_res)): t1[ri, ci].set_facecolor('#f4f4f4')
+            if not secuencia_tablas:
+                fig = plt.figure(figsize=(8.5, 11))
+                crear_encabezado_memoria_zapata(fig, "DICTAMEN GEOTÉCNICO",
+                                                contador, total_paginas, p_proy, p_elem, p_sondeo, p_fecha, logo_url=logo_url)
+                fig.text(0.05, 0.78, nota_dictamen, fontsize=8.2, style='italic', weight='bold', color='darkgreen')
+                pdf.savefig(fig); plt.close(); contador += 1
+            else:
+                for idx_seq, (df_chunk, tit_sec, col_hdr) in enumerate(secuencia_tablas):
+                    es_ult_tabla = (idx_seq == len(secuencia_tablas) - 1)
+                    incluye_dictamen_aqui = es_ult_tabla and (not dictamen_en_hoja_aparte)
 
-        fig.text(0.05, 0.49, f"B. RESUMEN DE DISEÑO — ZAPATAS AISLADAS [NTC-CDMX 2023 | {ubicacion_lbl}]", fontsize=8.2, weight='bold', color='#7030a0')
-        ax_m2 = fig.add_axes([0.05, 0.18, 0.90, 0.29]); ax_m2.axis('off')
-        if not df_ais.empty:
-            rows_a = [[
-                f"{r['Df']:.2f}", f"{r['B']:.2f}", _cortar_modelo(r.get('modelo_suelo_aplicado', '')),
-                f"{r['q_adm_corte_kgcm2']:.2f}", f"{r['Se_corte_mm']:.1f}",
-                f"{r['q_adm_def_kgcm2']:.2f}", r['criterio_gobernante'], f"{r['q_rec_kgcm2']:.2f}",
-                f"{r['Se_final_mm']:.1f}", f"{r['ks_ton_m3']:.0f}"
-            ] for _, r in df_ais.head(14).iterrows()]
-            t2 = ax_m2.table(cellText=[cols_res] + rows_a, loc='center', cellLoc='center',
-                             colWidths=[0.06, 0.06, 0.11, 0.09, 0.09, 0.09, 0.20, 0.09, 0.09, 0.12])
-            t2.auto_set_font_size(False); t2.set_fontsize(6.8); t2.scale(1, 1.18)
-            for j in range(len(cols_res)):
-                t2[0, j].set_facecolor('#7030a0'); t2[0, j].set_text_props(color='white', weight='bold')
-            for ri in range(1, len(rows_a) + 1):
-                if ri % 2 == 0:
-                    for ci in range(len(cols_res)): t2[ri, ci].set_facecolor('#f4f4f4')
+                    fig = plt.figure(figsize=(8.5, 11))
+                    crear_encabezado_memoria_zapata(
+                        fig, "RESUMEN DE DISEÑO (FALLA VS. DEFORMACIÓN)",
+                        contador, total_paginas, p_proy, p_elem, p_sondeo, p_fecha, logo_url=logo_url
+                    )
+                    fig.text(0.05, 0.84, tit_sec, fontsize=8.2, weight='bold', color=col_hdr)
 
-        q_min_g = df_res['q_rec_kgcm2'].min() if not df_res.empty else 0.0
-        q_max_g = df_res['q_rec_kgcm2'].max() if not df_res.empty else 0.0
-        se_max_g = df_res['Se_final_mm'].max() if not df_res.empty else 0.0
+                    max_h = 0.66 if incluye_dictamen_aqui else 0.76
+                    _dibujar_tabla_en_caja(fig, df_chunk, 0.82, max_h, col_hdr)
 
-        nota_dictamen = (
-            f"DICTAMEN GEOTÉCNICO Y RECOMENDACIONES DE DISEÑO (NTC-CDMX 2023 | {ubicacion_lbl}):\n"
-            f"1. Se evaluaron las ecuaciones separadas de las NTC-CDMX 2023 (Num. 3.5.1) y el control de servicio ({margen_pct:.0f}% de Se_máx).\n"
-            f"2. Las capacidades recomendadas gobernantes (q_rec) oscilan entre {q_min_g:.2f} y {q_max_g:.2f} kg/cm², acotando\n"
-            f"   la deformación elástica esperada a un máximo de {se_max_g:.1f} mm dentro del margen normativo.\n"
-            f"3. Se recomienda desplante sobre terreno natural firme libre de rellenos, con plantilla de concreto f'c = 100 kg/cm²."
-        )
-        fig.text(0.05, 0.04, nota_dictamen, fontsize=7.4, style='italic', weight='bold', color='darkgreen')
+                    if incluye_dictamen_aqui:
+                        fig.text(0.05, 0.04, nota_dictamen, fontsize=7.4, style='italic', weight='bold', color='darkgreen')
 
-        pdf.savefig(fig); plt.close()
+                    pdf.savefig(fig); plt.close(); contador += 1
+
+                if dictamen_en_hoja_aparte:
+                    fig = plt.figure(figsize=(8.5, 11))
+                    crear_encabezado_memoria_zapata(
+                        fig, "DICTAMEN GEOTÉCNICO Y RECOMENDACIONES DE DISEÑO",
+                        contador, total_paginas, p_proy, p_elem, p_sondeo, p_fecha, logo_url=logo_url
+                    )
+                    fig.text(0.06, 0.82, nota_dictamen, va='top', ha='left', fontsize=8.8, style='italic', weight='bold', color='darkgreen')
+                    pdf.savefig(fig); plt.close(); contador += 1
 
     return pdf_buffer.getvalue()

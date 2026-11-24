@@ -23,7 +23,7 @@ from cimentaciones_superficiales import (
     procesar_datos_superficiales,
     generar_analisis_parametrico_zapatas
 )
-from generador_memoria_zapatas import generar_memoria_zapatas_pdf
+from generador_memoria_zapatas import generar_memoria_zapatas_pdf, cargar_imagen_logo
 
 # ==========================================
 # 0. CONFIGURACIÓN DE PÁGINA E ICONO
@@ -222,12 +222,9 @@ def generar_pdf_desde_excel(archivo_excel):
 
             ax_logo = fig.add_axes([0.08, 0.89, 0.15, 0.08])
             ax_logo.axis('off')
-            if os.path.exists(logo_url):
-                try: ax_logo.imshow(plt.imread(logo_url))
-                except Exception: ax_logo.text(0.5, 0.5, '[ LOGO ]', ha='center', va='center', fontsize=10, color='gray')
-            elif os.path.exists('logo_empresa.png'):
-                try: ax_logo.imshow(plt.imread('logo_empresa.png'))
-                except Exception: ax_logo.text(0.5, 0.5, '[ LOGO ]', ha='center', va='center', fontsize=10, color='gray')
+            img_logo_perfil = cargar_imagen_logo(logo_url)
+            if img_logo_perfil is not None:
+                ax_logo.imshow(img_logo_perfil, aspect='equal')
             else:
                 ax_logo.text(0.5, 0.5, '[ LOGO ]', ha='center', va='center', fontsize=10, color='gray')
             
@@ -587,16 +584,21 @@ with tab_cimentacion:
 
                 try:
                     archivo_calc.seek(0)
-                    df_proy_temp = pd.read_excel(archivo_calc, sheet_name='Proyecto').set_index('Parametro')['Valor'].to_dict()
+                    df_p_raw = pd.read_excel(archivo_calc, sheet_name='Proyecto')
+                    df_p_raw['Parametro'] = df_p_raw['Parametro'].astype(str).str.strip()
+                    df_proy_temp = df_p_raw.set_index('Parametro')['Valor'].to_dict()
                     nm_proy = str(df_proy_temp.get('Proyecto', 'ESTUDIO GEOTÉCNICO'))
                     nm_elem = str(df_proy_temp.get('Elemento', 'DISEÑO DE CIMENTACIONES'))
                     nm_sondeo = str(df_proy_temp.get('Sondeo', 'SONDEO 1'))
                     nm_fecha = str(df_proy_temp.get('Fecha', ''))
+                    nm_logo = str(df_proy_temp.get('LogoURL', 'logo_empresa.png')).strip()
                 except Exception:
-                    nm_proy, nm_elem, nm_sondeo, nm_fecha = "PROYECTO", "CIMENTACIONES", "SONDEO 1", ""
+                    nm_proy, nm_elem, nm_sondeo, nm_fecha, nm_logo = "PROYECTO", "CIMENTACIONES", "SONDEO 1", "", "logo_empresa.png"
 
                 with st.spinner("Compilando memoria analítica en PDF..."):
-                    pdf_memoria_bytes = generar_memoria_calculo_pdf(df_tramos, matrices, nm_proy, nm_elem, nm_sondeo, nm_fecha)
+                    pdf_memoria_bytes = generar_memoria_calculo_pdf(
+                        df_tramos, matrices, nm_proy, nm_elem, nm_sondeo, nm_fecha, logo_url=nm_logo
+                    )
 
                 st.download_button(
                     label="📄 Descargar Memoria de Cálculo PDF",
@@ -613,7 +615,7 @@ with tab_cimentacion:
 # ==========================================
 with tab_zapatas:
     st.header("Cálculo de Cimentaciones Superficiales — NTC-CDMX 2023")
-    st.caption("Revisión combinada de Estado Límite de Falla (ecuaciones separadas Cohesivo vs. Friccionante) y Estado Límite de Servicio (deformación elástica acotada al margen normativo).")
+    st.caption("Revisión combinada de Estado Límite de Falla (esfuerzo cortante) vs. Estado Límite de Servicio (deformación elástica acotada al margen normativo).")
 
     col_met, col_info = st.columns([1, 2])
     with col_met:
@@ -625,9 +627,9 @@ with tab_zapatas:
         )
     with col_info:
         if metodo_exp_zap == "SPT":
-            st.info("**Modo SPT (NTC-CDMX 2023):** Deduce $\phi$, $c_u$ mediante correlaciones corregidas ($C_N$, $N_{60}$, $(N_1)_{60}$). Si capturas el **Módulo Elástico Secante ($E_{s,\text{sec}}$)** del ensaye axial, se usará directamente para el control de deformaciones.")
+            st.info(r"**Modo SPT (NTC-CDMX 2023):** Deduce $\phi$, $c_u$ mediante correlaciones corregidas ($C_N$, $N_{60}$, $(N_1)_{60}$). Si capturas el **Módulo Elástico Secante ($E_{s,\text{sec}}$)** del ensaye axial, se usará directamente para el control de deformaciones.")
         else:
-            st.info("**Modo PCA (Muestras Inalteradas):** Emplea los parámetros de laboratorio ($c$, $\phi$, $\gamma$) y el **Módulo Elástico Secante ($E_{s,\text{sec}}$)** del ensaye axial. En suelos con ambos parámetros ($c$ y $\phi$), evalúa las ecuaciones cohesiva y friccionante por separado conforme a NTC-CDMX 3.5.1.")
+            st.info(r"**Modo PCA (Muestras Inalteradas):** Emplea los parámetros de laboratorio ($c$, $\phi$, $\gamma$) y el **Módulo Elástico Secante ($E_{s,\text{sec}}$)** del ensaye axial. En suelos con ambos parámetros ($c$ y $\phi$), evalúa las ecuaciones cohesiva y friccionante por separado conforme a NTC-CDMX 3.5.1.")
 
     archivo_zap = st.file_uploader("Carga el archivo Datos_Sondeo.xlsx", type=["xlsx"], key="uploader_zapatas")
 
@@ -638,7 +640,7 @@ with tab_zapatas:
 
             col_tb_tit, col_tb_unit = st.columns([2, 1])
             with col_tb_tit:
-                st.markdown("#### Parámetros Geotécnicos por Estrato (Introduce aquí el Módulo Elástico Secante Axial $E_{s,\text{sec}}$)")
+                st.markdown(r"#### Parámetros Geotécnicos por Estrato (Introduce aquí el Módulo Elástico Secante Axial $E_{s,\text{sec}}$)")
             with col_tb_unit:
                 unidad_es_sec = st.selectbox(
                     "Unidad de captura para Es Secante:",
@@ -835,14 +837,14 @@ with tab_zapatas:
                     'ks_ton_m3': '{:.0f} t/m³'
                 }
 
-                st.markdown("#### A. Zapatas Corridas ($L \gg B$)")
+                st.markdown(r"#### A. Zapatas Corridas ($L \gg B$)")
                 st.dataframe(
                     df_corr_v[cols_vista_z].style.format(formato_tabla_z),
                     width="stretch",
                     hide_index=True
                 )
 
-                st.markdown("#### B. Zapatas Aisladas ($B \times L$)")
+                st.markdown(r"#### B. Zapatas Aisladas ($B \times L$)")
                 st.dataframe(
                     df_ais_v[cols_vista_z].style.format(formato_tabla_z),
                     width="stretch",
@@ -851,10 +853,10 @@ with tab_zapatas:
 
                 col_m1, col_m2 = st.columns(2)
                 with col_m1:
-                    st.markdown("#### Matriz $q_{\text{rec}}$ Recomendada — Corridas (kg/cm²)")
+                    st.markdown(r"#### Matriz $q_{\text{rec}}$ Recomendada — Corridas (kg/cm²)")
                     st.dataframe(az['mat_corr_qrec_kgcm2'].style.format("{:.2f} kg/cm²").highlight_max(axis=0, color="#d4edda"))
                 with col_m2:
-                    st.markdown("#### Matriz $q_{\text{rec}}$ Recomendada — Aisladas (kg/cm²)")
+                    st.markdown(r"#### Matriz $q_{\text{rec}}$ Recomendada — Aisladas (kg/cm²)")
                     st.dataframe(az['mat_ais_qrec_kgcm2'].style.format("{:.2f} kg/cm²").highlight_max(axis=0, color="#d4edda"))
 
                 col_s_m1, col_s_m2 = st.columns(2)
@@ -869,17 +871,20 @@ with tab_zapatas:
                 st.subheader("Generar Memoria de Cálculo de Zapatas en PDF")
                 try:
                     archivo_zap.seek(0)
-                    df_proy_z = pd.read_excel(archivo_zap, sheet_name='Proyecto').set_index('Parametro')['Valor'].to_dict()
+                    df_pz_raw = pd.read_excel(archivo_zap, sheet_name='Proyecto')
+                    df_pz_raw['Parametro'] = df_pz_raw['Parametro'].astype(str).str.strip()
+                    df_proy_z = df_pz_raw.set_index('Parametro')['Valor'].to_dict()
                     nm_proy_z = str(df_proy_z.get('Proyecto', 'ESTUDIO DE MECÁNICA DE SUELOS'))
                     nm_elem_z = str(df_proy_z.get('Elemento', 'CIMENTACIONES SUPERFICIALES'))
                     nm_sondeo_z = f"{df_proy_z.get('Sondeo', 'EXPLORACIÓN')} ({metodo_exp_zap})"
                     nm_fecha_z = str(df_proy_z.get('Fecha', ''))
+                    nm_logo_z = str(df_proy_z.get('LogoURL', 'logo_empresa.png')).strip()
                 except Exception:
-                    nm_proy_z, nm_elem_z, nm_sondeo_z, nm_fecha_z = "PROYECTO", "CIMENTACIONES SUPERFICIALES", f"EXPLORACIÓN ({metodo_exp_zap})", ""
+                    nm_proy_z, nm_elem_z, nm_sondeo_z, nm_fecha_z, nm_logo_z = "PROYECTO", "CIMENTACIONES SUPERFICIALES", f"EXPLORACIÓN ({metodo_exp_zap})", "", "logo_empresa.png"
 
                 with st.spinner("Compilando memoria ejecutiva de zapatas en PDF..."):
                     pdf_zap_bytes = generar_memoria_zapatas_pdf(
-                        df_z_pdf, az, nm_proy_z, nm_elem_z, nm_sondeo_z, nm_fecha_z
+                        df_z_pdf, az, nm_proy_z, nm_elem_z, nm_sondeo_z, nm_fecha_z, logo_url=nm_logo_z
                     )
 
                 st.download_button(
