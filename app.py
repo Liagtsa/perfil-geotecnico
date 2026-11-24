@@ -24,6 +24,8 @@ from cimentaciones_superficiales import (
     generar_analisis_parametrico_zapatas
 )
 from generador_memoria_zapatas import generar_memoria_zapatas_pdf, cargar_imagen_logo
+from calculos_sict_puentes import procesar_sondeo_sict, ejecutar_estudio_sict_modular
+from generador_memoria_sict import generar_memoria_sict_pdf
 
 # ==========================================
 # 0. CONFIGURACIÓN DE PÁGINA E ICONO
@@ -387,7 +389,7 @@ def generar_pdf_desde_excel(archivo_excel):
 
             ax_foot = fig.add_axes([0.08, 0.015, 0.87, 0.065])
             ax_foot.set_xlim(0, 1); ax_foot.set_ylim(0, 1); ax_foot.set_xticks([]); ax_foot.set_yticks([])
-            for s in ax_foot.spines.values(): s.set_edgecolor('black'); s.set_linewidth(1.0); s.set_visible(True)
+            for s in ax.spines.values(): s.set_edgecolor('black'); s.set_linewidth(1.0); s.set_visible(True)
             ax_foot.axvline(0.55, color='black', lw=0.8)
             
             tipos_suelo = [('Grava (G)', 'oo', '#e0e0e0'), ('Arena (S)', '...', '#f5f5dc'), ('Limo (M)', '-.', '#e6e6fa'), ('Arcilla (C)', '///', '#c0c0c0'), ('Roca', 'xx', '#b0b0b0')]
@@ -417,12 +419,13 @@ def generar_pdf_desde_excel(archivo_excel):
 # 3. INTERFAZ GRÁFICA PRINCIPAL (CON PESTAÑAS)
 # ==========================================
 st.title("🏗️ Portal de Ingeniería Geotécnica")
-st.caption("Perfiles Estratigráficos (ISO 710-2), Cimentaciones Profundas y Superficiales (NTC-CDMX 2023)")
+st.caption("Perfiles Estratigráficos (ISO 710-2), Cimentaciones NTC-CDMX 2023 y Estudios de Puentes SICT / AASHTO (TdR)")
 
-tab_perfil, tab_cimentacion, tab_zapatas = st.tabs([
+tab_perfil, tab_cimentacion, tab_zapatas, tab_sict = st.tabs([
     "📄 Perfil Estratigráfico ISO 710-2",
     "🏗️ Cimentaciones Profundas (Pilas)",
-    "📐 Zapatas Superficiales (NTC-CDMX 2023)"
+    "📐 Zapatas Superficiales (NTC-CDMX 2023)",
+    "🌉 Puentes SICT / AASHTO (TdR)"
 ])
 
 with tab_perfil:
@@ -897,3 +900,301 @@ with tab_zapatas:
                 )
         except Exception as e:
             st.error(f"Error al procesar zapatas superficiales: {e}")
+
+
+# ==========================================
+# 5. PESTAÑA 4: PUENTES Y PASOS SICT / AASHTO (TdR ETAPA V Y VI)
+# ==========================================
+with tab_sict:
+    st.header("Estudio Geotécnico y de Cimentación para Puentes y Pasos — TdR SICT / AASHTO")
+    st.caption(
+        "Cumplimiento modular de los Términos de Referencia SICT (Etapa V y VI) y Normas AASHTO. "
+        "Habilita o deshabilita cada cálculo según las condiciones reales del cruce (ej. PFFCC sin cauce fluvial)."
+    )
+
+    col_tipo_cr, col_nota_cr = st.columns([1.2, 1.8])
+    with col_tipo_cr:
+        tipo_cruce_sict = st.selectbox(
+            "Tipo de Estructura / Sitio de Cruce:",
+            options=[
+                "PFFCC (Paso Superior de Ferrocarril — Sin Cauce)",
+                "PSV / PIV (Paso Vehicular — Sin Cauce)",
+                "Puente sobre Cauce Fluvial / Río",
+                "Viaducto / Puente sobre Barranca Seca"
+            ],
+            index=0,
+            key="sict_tipo_cruce"
+        )
+    es_fluvial_default = ("Fluvial" in tipo_cruce_sict)
+    with col_nota_cr:
+        if es_fluvial_default:
+            st.info("**Cruce Fluvial detectado:** Se sugiere mantener **habilitado** el módulo de Socavación General y Local (TdR 1.5.6.1), cuyos efectos se acoplarán automáticamente a zapatas y pilas.")
+        else:
+            st.info(f"**{tipo_cruce_sict.split('(')[0].strip()}:** Al no cruzar un río, puedes mantener **deshabilitada** la socavación hidráulica (`0.00 m`); el reporte justificará técnicamente su no aplicabilidad.")
+
+    archivo_sict = st.file_uploader("Carga el archivo Datos_Sondeo.xlsx para evaluación SICT / AASHTO", type=["xlsx"], key="uploader_sict")
+
+    if archivo_sict is not None:
+        try:
+            df_tramos_s, naf_s, proy_dict_s, pruebas_det_s = procesar_sondeo_sict(archivo_sict)
+            st.success(f"Sondeo cargado exitosamente: {len(df_tramos_s)} estratos procesados | NAF: {naf_s if naf_s is not None else 'No detectado'} m")
+
+            with st.expander("Ver / Ajustar Parámetros Geotécnicos por Estrato (Resistencia, Rigidez y Consolidación)", expanded=False):
+                cols_edit_s = ['Prof_ini', 'Prof_fin', 'SUCS', 'Tipo', 'Gamma', 'c_kPa', 'phi_deg', 'Es_kPa', 'dm_mm', 'Cc', 'e0']
+                df_tramos_s_edit = st.data_editor(
+                    df_tramos_s[cols_edit_s],
+                    width="stretch",
+                    hide_index=True,
+                    key="editor_tramos_sict"
+                )
+                df_sict_calc = df_tramos_s.copy()
+                for c_ed in ['SUCS', 'Tipo', 'Gamma', 'c_kPa', 'phi_deg', 'Es_kPa', 'dm_mm', 'Cc', 'e0']:
+                    df_sict_calc[c_ed] = df_tramos_s_edit[c_ed]
+
+            st.markdown("#### 1. Selección Modular de Cálculos Aplicables al Proyecto")
+            col_m1, col_m2, col_m3 = st.columns(3)
+            with col_m1:
+                chk_s_exp = st.checkbox("1. Exploración y Suspensión (TdR 1.5.2)", value=True, key="chk_s_exp")
+                chk_s_soc = st.checkbox("2. Socavación General y Local (TdR 1.5.6)", value=es_fluvial_default, key="chk_s_soc")
+            with col_m2:
+                chk_s_sup = st.checkbox("3. Zapata / Estribo AASHTO (TdR 1.5.8)", value=True, key="chk_s_sup")
+                chk_s_dr = st.checkbox("4. Pilas: Davisson-Robinson (TdR 1.5.8)", value=True, key="chk_s_dr")
+            with col_m3:
+                chk_s_emp = st.checkbox("5. Empuje de Tierras en Estribos (SICT)", value=True, key="chk_s_emp")
+                chk_s_ter = st.checkbox("6. Terraplenes y Excavaciones (TdR 1.5.7)", value=True, key="chk_s_ter")
+
+            params_sict = {'tipo_cruce': tipo_cruce_sict}
+
+            st.markdown("#### 2. Datos de Entrada de los Módulos Habilitados")
+
+            if chk_s_exp:
+                with st.expander("🔍 Parámetros de Exploración, Cortes y Laderas (TdR 1.5.2)", expanded=False):
+                    ce1, ce2, ce3 = st.columns(3)
+                    with ce1:
+                        params_sict['corte_subrasante_m'] = st.number_input("Corte previsto por subrasante / PIV (m)", value=0.0, min_value=0.0, step=0.5, key="s_corte_sub")
+                    with ce2:
+                        params_sict['en_ladera'] = st.checkbox("¿Apoyo próximo a talud de barranca / ladera?", value=False, key="s_en_lad")
+                    with ce3:
+                        params_sict['dist_talud_m'] = st.number_input("Retiro horiz. arista zapata al talud (m) [Mín. 2B]", value=8.0, min_value=0.0, step=0.5, disabled=not params_sict['en_ladera'], key="s_dist_tal")
+
+            if chk_s_soc:
+                with st.expander("🌊 Parámetros Hidráulicos de Socavación General y Local (TdR 1.5.6.1)", expanded=True):
+                    cs1, cs2, cs3, cs4 = st.columns(4)
+                    with cs1:
+                        params_sict['Qd_m3s'] = st.number_input("Gasto de diseño Qd (m³/s)", value=120.0, min_value=1.0, step=10.0, key="s_qd")
+                        params_sict['Be_m'] = st.number_input("Ancho efectivo de cauce Be (m)", value=25.0, min_value=1.0, step=1.0, key="s_be")
+                    with cs2:
+                        params_sict['Hm_m'] = st.number_input("Tirante medio Hm (m)", value=2.50, min_value=0.20, step=0.20, key="s_hm")
+                        params_sict['Ho_m'] = st.number_input("Tirante local en apoyo Ho (m)", value=2.80, min_value=0.20, step=0.20, key="s_ho")
+                    with cs3:
+                        params_sict['V0_ms'] = st.number_input("Velocidad media V0 (m/s)", value=2.40, min_value=0.10, step=0.20, key="s_v0")
+                        params_sict['Tr_anios'] = st.selectbox("Periodo de retorno Tr (años)", options=[50, 100, 200, 500, 1000], index=1, key="s_tr")
+                    with cs4:
+                        params_sict['bp_soc_m'] = st.number_input("Ancho expuesto de pila b (m)", value=1.20, min_value=0.30, step=0.10, key="s_bp")
+                        params_sict['lp_soc_m'] = st.number_input("Largo de pila l (m)", value=3.60, min_value=0.30, step=0.20, key="s_lp")
+                    cs5, cs6, cs7 = st.columns(3)
+                    with cs5:
+                        params_sict['esviaje_deg'] = st.number_input("Ángulo de esviaje corriente (°)", value=0.0, min_value=0.0, max_value=80.0, step=5.0, key="s_esv")
+                    with cs6:
+                        params_sict['forma_pila'] = st.selectbox("Geometría de nariz de pila", options=["Circular / Redondeada", "Rectangular", "Lenticular / Aguda"], key="s_fpila")
+                    with cs7:
+                        params_sict['metodo_soc_local'] = st.selectbox("Criterio Socavación Local", options=["Envolvente (Mayor)", "Laursen", "Yaroslavtziev"], key="s_msoc")
+
+            if chk_s_sup:
+                with st.expander("📐 Cimentación Superficial AASHTO — Capacidad, Deslizamiento y Volteo (TdR 1.5.8)", expanded=True):
+                    cz1, cz2, cz3 = st.columns(3)
+                    with cz1:
+                        params_sict['B_zap_m'] = st.number_input("Ancho de zapata B (m)", value=3.20, min_value=0.60, step=0.20, key="s_bzap")
+                        params_sict['L_zap_m'] = st.number_input("Largo de zapata L (m)", value=8.50, min_value=0.60, step=0.50, key="s_lzap")
+                        params_sict['Df_zap_m'] = st.number_input("Profundidad desplante Df (m) [Máx 4m SICT]", value=2.20, min_value=0.50, step=0.20, key="s_dfzap")
+                    with cz2:
+                        params_sict['V_zap_ton'] = st.number_input("Carga vertical total V (t)", value=210.0, min_value=1.0, step=10.0, key="s_vzap")
+                        params_sict['HB_zap_ton'] = st.number_input("Cortante horizontal H_B (t)", value=22.0, min_value=0.0, step=2.0, key="s_hbzap")
+                        params_sict['HL_zap_ton'] = st.number_input("Cortante longitudinal H_L (t)", value=5.0, min_value=0.0, step=2.0, key="s_hlzap")
+                    with cz3:
+                        params_sict['MB_zap_tonm'] = st.number_input("Momento volcador M_B (t·m)", value=55.0, min_value=0.0, step=5.0, key="s_mbzap")
+                        params_sict['ML_zap_tonm'] = st.number_input("Momento longitudinal M_L (t·m)", value=12.0, min_value=0.0, step=5.0, key="s_mlzap")
+                        params_sict['es_sismo_zap'] = st.checkbox("¿Combinación Sísmica / Evento Extremo?", value=False, key="s_siszap")
+                    params_sict['FS_cap_zap'] = 3.0
+
+            if chk_s_dr:
+                with st.expander("🏗️ Pilas / Pilotes: Empotramiento y Pandeo — Método de Davisson y Robinson (TdR 1.5.8)", expanded=True):
+                    cd1, cd2, cd3 = st.columns(3)
+                    with cd1:
+                        params_sict['D_pila_m'] = st.number_input("Diámetro de pila D (m)", value=1.20, min_value=0.40, step=0.10, key="s_dpila")
+                        params_sict['L_pila_m'] = st.number_input("Longitud enterrada de pila L (m)", value=18.0, min_value=3.0, step=1.0, key="s_lpila")
+                    with cd2:
+                        params_sict['P_act_pila_ton'] = st.number_input("Carga axial actuante por pila P_act (t)", value=220.0, min_value=10.0, step=10.0, key="s_pact")
+                        params_sict['H_libre_col_m'] = st.number_input("Altura libre de columna / pila-columna sobre terreno (m)", value=0.0, min_value=0.0, step=0.5, key="s_hcol")
+                    with cd3:
+                        params_sict['fc_pila_kgcm2'] = st.number_input("Resistencia concreto f'c (kg/cm²)", value=250.0, min_value=200.0, step=50.0, key="s_fcpila")
+                        params_sict['condicion_cabeza_pila'] = st.selectbox(
+                            "Condición de restricción en cabeza",
+                            options=[
+                                "Empotrada - Traslación Impedida (K = 0.70)",
+                                "Articulada - Traslación Impedida (K = 0.80)",
+                                "Empotrada - Cabeza Desplazable (K = 1.20)",
+                                "Voladizo / Cabeza Libre (K = 2.00)"
+                            ],
+                            index=1,
+                            key="s_kcab"
+                        )
+
+            if chk_s_emp:
+                with st.expander("🧱 Empuje de Tierras en Estribos y Muros (Rankine + Mononobe-Okabe, SICT)", expanded=False):
+                    cm1, cm2, cm3 = st.columns(3)
+                    with cm1:
+                        params_sict['H_muro_m'] = st.number_input("Altura de estribo / muro H (m)", value=6.50, min_value=1.50, step=0.50, key="s_hmuro")
+                        params_sict['gamma_relleno_kNm3'] = st.number_input("γ relleno compactado (kN/m³)", value=19.0, min_value=15.0, step=0.5, key="s_gamrel")
+                    with cm2:
+                        params_sict['phi_relleno_deg'] = st.number_input("Ángulo fricción relleno φ (°)", value=32.0, min_value=20.0, max_value=45.0, step=1.0, key="s_phirel")
+                        params_sict['beta_relleno_deg'] = st.number_input("Inclinación talud relleno β (°)", value=0.0, min_value=0.0, max_value=25.0, step=1.0, key="s_betarel")
+                    with cm3:
+                        params_sict['heq_sc_m'] = st.number_input("Altura equiv. sobrecarga vehicular h_eq (m)", value=0.60, min_value=0.0, step=0.10, key="s_heq")
+                        params_sict['kh_sismo_muro'] = st.number_input("Coeficiente sísmico horizontal kh", value=0.12, min_value=0.0, max_value=0.50, step=0.02, key="s_khmuro")
+                    params_sict['c_relleno_kpa'] = 0.0
+                    params_sict['kv_sismo_muro'] = 0.0
+
+            if chk_s_ter:
+                with st.expander("⛰️ Terraplenes de Acceso (Corto/Largo Plazo) y Taludes de Excavación (TdR 1.5.7)", expanded=False):
+                    ct1, ct2, ct3 = st.columns(3)
+                    with ct1:
+                        params_sict['H_terr_m'] = st.number_input("Altura de terraplén de acceso (m)", value=6.50, min_value=0.50, step=0.50, key="s_hterr")
+                        params_sict['B_corona_m'] = st.number_input("Ancho de corona de terraplén (m)", value=12.0, min_value=4.0, step=1.0, key="s_bcor")
+                    with ct2:
+                        params_sict['talud_terr_HV'] = st.number_input("Talud de terraplén (H : 1V)", value=1.50, min_value=1.0, step=0.25, key="s_talterr")
+                        params_sict['cv_m2_anio'] = st.number_input("Coef. consolidación Cv (m²/año)", value=2.50, min_value=0.20, step=0.50, key="s_cv")
+                    with ct3:
+                        df_ref_exc = params_sict.get('Df_zap_m', 2.20)
+                        params_sict['H_exc_m'] = st.number_input("Profundidad máxima excavación (m)", value=float(df_ref_exc), min_value=0.50, step=0.50, key="s_hexc")
+                        params_sict['talud_exc_HV'] = st.number_input("Talud temporal excavación (H : 1V)", value=0.75, min_value=0.25, step=0.25, key="s_talexc")
+                    params_sict['gamma_terr_kNm3'] = 19.5
+
+            with st.expander("📋 Datos Oficiales para Cédula 'Anexo Estudio de Cimentación SICT'", expanded=False):
+                ca1, ca2, ca3 = st.columns(3)
+                with ca1:
+                    s_contrato = st.text_input("Contrato No.", value=str(proy_dict_s.get('Contrato', 'SICT-2026-S/N')), key="s_cont")
+                    s_camino = st.text_input("Camino / Línea Ferroviaria", value=str(proy_dict_s.get('Elemento', 'Vialidad / Cruce Ferroviario')), key="s_cam")
+                with ca2:
+                    s_tramo = st.text_input("Tramo / Kilometraje", value=str(proy_dict_s.get('Tramo', 'Km 0+000.00')), key="s_tram")
+                    s_loc = st.text_input("Localización", value=str(proy_dict_s.get('Coordenadas', 'Puebla, Pue.')), key="s_loc")
+                with ca3:
+                    s_resp = st.text_input("Responsable Técnico", value="ING. ESPECIALISTA EN GEOTECNIA", key="s_resp")
+                    s_ced = st.text_input("Cédula Profesional Núm.", value="S/D", key="s_ced")
+
+                clab1, clab2, clab3 = st.columns(3)
+                with clab1:
+                    chk_cu = st.checkbox("Marcar Triaxial Consolidada (CU) en Anexo", value=False, key="s_chk_cu")
+                with clab2:
+                    chk_cd = st.checkbox("Marcar Triaxial Lenta (CD) en Anexo", value=False, key="s_chk_cd")
+                with clab3:
+                    chk_torc = st.checkbox("Marcar Torcómetro de Bolsillo en Anexo", value=False, key="s_chk_torc")
+
+            config_modulos_sict = {
+                'aplica_exploracion': chk_s_exp,
+                'aplica_socavacion': chk_s_soc,
+                'aplica_superficial_aashto': chk_s_sup,
+                'aplica_pandeo_davisson': chk_s_dr,
+                'aplica_empujes_muros': chk_s_emp,
+                'aplica_terraplenes_excavacion': chk_s_ter
+            }
+
+            if st.button("Ejecutar Estudio Integral SICT / AASHTO", type="primary", key="btn_calc_sict"):
+                res_sict = ejecutar_estudio_sict_modular(df_sict_calc, naf_s, config_modulos_sict, params_sict)
+                st.session_state['res_sict_actual'] = res_sict
+                st.session_state['df_sict_pdf'] = df_sict_calc
+
+            if 'res_sict_actual' in st.session_state:
+                rs_all = st.session_state['res_sict_actual']
+                df_s_pdf = st.session_state.get('df_sict_pdf', df_sict_calc)
+
+                st.markdown("---")
+                st.subheader("Resultados del Estudio Geotécnico y de Cimentación (SICT / AASHTO)")
+
+                if rs_all['exploracion'].get('aplica', False):
+                    rexp = rs_all['exploracion']
+                    st.markdown(f"**1. Criterios de Exploración (TdR 1.5.2):** {rexp['criterio_suspension_msg']} | {rexp['ladera_msg']}")
+
+                rsoc = rs_all['socavacion']
+                if rsoc.get('aplica', False):
+                    ms1, ms2, ms3 = st.columns(3)
+                    ms1.metric("Socavación General (Lischtvan)", f"{rsoc['soc_general_m']:.2f} m")
+                    ms2.metric(f"Socavación Local ({rsoc['metodo_local_usado']})", f"{rsoc['soc_local_adoptada_m']:.2f} m")
+                    ms3.metric("Socavación Total Acumulada", f"{rsoc['soc_total_m']:.2f} m")
+                else:
+                    st.success(f"**2. Socavación Hidráulica Deshabilitada (`0.00 m`):** {rsoc.get('motivo_no_aplica', '')}")
+
+                if rs_all['superficial_aashto'].get('aplica', False):
+                    rz = rs_all['superficial_aashto']
+                    st.markdown("#### Revisión de Cimentación Superficial (Norma AASHTO / TdR 1.5.8)")
+                    if rz['excede_4m_tdr']:
+                        st.warning("⚠️ **Alerta Normativa TdR 1.5.8:** La profundidad de desplante supera los `4.00 m`. Los Términos de Referencia exigen analizar y proponer **cimentación profunda**.")
+                    mz1, mz2, mz3, mz4 = st.columns(4)
+                    mz1.metric("Capacidad q_adm AASHTO", f"{rz['q_adm_asd_kgcm2']:.2f} kg/cm²", f"FS = {rz['FS_cap_calc']:.2f}")
+                    mz2.metric("FS Deslizamiento", f"{rz['FS_desl_calc']:.2f}", "Cumple" if rz['cumple_deslizamiento'] else "No cumple")
+                    mz3.metric("FS Volteo", f"{rz['FS_volt_calc']:.2f}", "Cumple" if rz['cumple_volteo'] else "No cumple")
+                    mz4.metric("Asentamiento Elástico Se", f"{rz['Se_cm']:.2f} cm", "Cumple (<=2.54 cm)" if rz['cumple_asentamiento'] else "Excede")
+
+                if rs_all['davisson_pandeo'].get('aplica', False):
+                    rdr = rs_all['davisson_pandeo']
+                    st.markdown("#### Pilas / Pilotes: Empotramiento y Pandeo (Davisson y Robinson, TdR 1.5.8)")
+                    md1, md2, md3, md4 = st.columns(4)
+                    md1.metric("Fijación Equivalente zf", f"{rdr['zf_fijacion_m']:.2f} m")
+                    md2.metric("Empotramiento Mín. (4T/4R)", f"{rdr['L_emp_min_requerida_m']:.2f} m", "Cumple" if rdr['cumple_empotramiento'] else "Aumentar L")
+                    md3.metric("Carga Crítica Pandeo P_cr", f"{rdr['P_cr_euler_ton']:.0f} t")
+                    md4.metric("FS contra Pandeo", f"{rdr['FS_pandeo']:.1f}", "Estable" if rdr['cumple_pandeo'] else "Revisar")
+
+                col_res_emp, col_res_ter = st.columns(2)
+                with col_res_emp:
+                    if rs_all['empujes_muros'].get('aplica', False):
+                        rem = rs_all['empujes_muros']
+                        st.markdown("#### Empuje de Tierras en Estribos")
+                        st.write(
+                            f"- Coeficientes: **$K_a = {rem['Ka']:.3f}$** | **$K_0 = {rem['K0']:.3f}$** | **$K_{{ae}} = {rem['Kae_mononobe']:.3f}$**\n"
+                            f"- Empuje Activo Estático Total: **{rem['Ea_total_estatico_tm']:.2f} t/m** ($M_{{volc}} = {rem['M_volc_estatico_tmm']:.1f}$ t·m/m)\n"
+                            f"- Empuje Activo Sísmico Total: **{rem['Ea_total_sismico_tm']:.2f} t/m** ($M_{{volc}} = {rem['M_volc_sismico_tmm']:.1f}$ t·m/m)"
+                        )
+                with col_res_ter:
+                    if rs_all['terraplen_excavacion'].get('aplica', False):
+                        rtr = rs_all['terraplen_excavacion']
+                        st.markdown("#### Terraplenes de Acceso y Excavación")
+                        st.write(
+                            f"- Estabilidad basal terraplén: **$FS = {rtr['FS_base_terraplen']:.2f}$**\n"
+                            f"- Asentamiento Acceso: **{rtr['asent_total_terraplen_cm']:.1f} cm** (Corto: {rtr['asent_corto_plazo_cm']:.1f} cm | Cons.: {rtr['asent_largo_plazo_cm']:.1f} cm)\n"
+                            f"- Talud Excavación ({rtr['talud_exc_H_V']}): **$FS = {rtr['FS_talud_exc']:.2f}$**"
+                        )
+
+                st.markdown("---")
+                st.subheader("Emitir Memoria de Cálculo SICT / AASHTO y Cédula Anexo Oficial (.PDF)")
+                datos_anexo_pdf = {
+                    'Proyecto': str(proy_dict_s.get('Proyecto', 'ESTUDIO GEOTÉCNICO Y DE CIMENTACIÓN')),
+                    'Contrato': s_contrato,
+                    'Tipo_Obra': tipo_cruce_sict,
+                    'Camino': s_camino,
+                    'Tramo': s_tramo,
+                    'Localizacion': s_loc,
+                    'Sondeo': str(proy_dict_s.get('Sondeo', 'SONDEO 1')),
+                    'Fecha': str(proy_dict_s.get('Fecha', '')),
+                    'Responsable_Tecnico': s_resp,
+                    'Cedula_Prof': s_ced,
+                    'Triaxial_CU': chk_cu,
+                    'Triaxial_CD': chk_cd,
+                    'Torcometro': chk_torc
+                }
+                logo_sict_url = str(proy_dict_s.get('LogoURL', 'logo_empresa.png')).strip()
+
+                with st.spinner("Compilando Memoria Geotécnica SICT y Cédula Anexo Oficial..."):
+                    pdf_sict_bytes = generar_memoria_sict_pdf(
+                        df_s_pdf, rs_all, pruebas_det_s, datos_anexo_pdf, logo_url=logo_sict_url
+                    )
+
+                st.download_button(
+                    label="📄 Descargar Memoria SICT + Cédula Anexo Oficial (.PDF)",
+                    data=pdf_sict_bytes,
+                    file_name="Memoria_Geotecnica_Puentes_SICT_AASHTO.pdf",
+                    mime="application/pdf",
+                    type="primary",
+                    key="btn_descarga_pdf_sict"
+                )
+        except Exception as e:
+            st.error(f"Error al procesar el estudio SICT / AASHTO: {e}")
