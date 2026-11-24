@@ -1,13 +1,23 @@
 # ==============================================================================
 # MODULO: calculos_sict_puentes.py
-# VERSION: 1.0.0-SICT-AASHTO-PUENTES-MODULAR
-# NORMATIVA: TdR SICT (Etapa V y VI), Normas SICT (N-PRY-CAR-6-01), AASHTO
+# VERSION: 2.0.0-SICT-AASHTO-2ETAPAS-MODULAR
+# NORMATIVA:
+#   - Terminos de Referencia SICT (Etapas V y VI) y N-PRY-CAR-8-01-004/19
+#   - AASHTO LRFD Bridge Design Specifications (O'Neill & Reese 1999, Sec. 10)
+#   - Poulos (1994) para asentamiento de grupo de pilotes (pilote equivalente)
+#   - Broms (1964) para capacidad lateral y momento maximo
+#   - Davisson & Robinson (1965) para longitud de empotramiento y pandeo
+#   - Rankine + Mononobe-Okabe para empujes metro a metro en estribos/muros
 # DESCRIPCION:
-#   Motor analitico modular para Estudios Geotecnicos y de Cimentacion de
-#   Puentes, Pasos Superiores/Inferiores (PFFCC, PSV, PIV) y Viaductos.
-#   Cada calculo puede habilitarse o deshabilitarse individualmente segun las
-#   condiciones reales del cruce (ej. PFFCC sin cauce fluvial -> socavacion OFF),
-#   acoplando automaticamente sus efectos aguas abajo.
+#   Flujo geotecnico-estructural en 2 Etapas secuenciales con interruptores
+#   modulares independientes:
+#     * ETAPA 1 (Pre-Estructural): Propuesta inicial de capacidad de carga para
+#       pilas individuales (compresion y tension) y zapatas preliminares.
+#     * ETAPA 2 (Post-Estructural): Revision definitiva multi-apoyo (grupos de
+#       pilotes a compresion, tension y cortante, asentamientos Poulos, Broms,
+#       Davisson-Robinson, o zapatas definitivas AASHTO).
+#     * ETAPA 3 (Complementarios): Socavacion opcional, estabilidad de taludes
+#       de excavacion, empujes metro a metro en muros y terraplenes de acceso.
 # ==============================================================================
 
 import math
@@ -34,7 +44,7 @@ def _a_float(val, default=np.nan):
 
 
 def _convertir_spt_raw(valor_raw):
-    """Interpreta golpes SPT y rechazos/avance triconica (tope 50 para correlacion, mas bandera de rechazo)."""
+    """Interpreta golpes SPT y rechazos/avance triconica (tope 50, mas bandera de rechazo)."""
     if valor_raw is None or pd.isna(valor_raw):
         return np.nan, False
     if isinstance(valor_raw, (int, float, np.number)):
@@ -61,13 +71,12 @@ def _convertir_spt_raw(valor_raw):
 
 
 # ==============================================================================
-# 0. PROCESAMIENTO UNIFICADO DEL ARCHIVO EXCEL PARA PUENTES SICT
+# 0. PROCESAMIENTO UNIFICADO DEL SONDEO (CON DEPURACIÓN DE TRAMOS INVERTIDOS)
 # ==============================================================================
 def procesar_sondeo_sict(xls_path_o_bytes):
     """
-    Lee Datos_Sondeo.xlsx y extrae el perfil estratigrafico enriquecido con
-    propiedades de resistencia, deformabilidad, granulometria estimada y
-    consolidacion para alimentar todos los modulos SICT / AASHTO.
+    Lee Datos_Sondeo.xlsx, depura posibles cotas invertidas y extrae el perfil
+    estratigrafico enriquecido para las Etapas 1, 2 y 3 del estudio SICT/AASHTO.
     """
     xls = pd.ExcelFile(xls_path_o_bytes)
     df_proy_raw = pd.read_excel(xls, 'Proyecto')
@@ -84,7 +93,8 @@ def procesar_sondeo_sict(xls_path_o_bytes):
     diam_barr = _a_float(df_proy.get('Diametro_Barrena_mm', 100.0), 100.0)
     sin_liner = str(df_proy.get('Muestreador_Liner', 'CON_LINER')).strip().upper() == 'SIN_LINER'
 
-    for col_n in ['Prof_ini', 'Prof_fin', 'W%', 'Recuperacion_cm', 'RQD_cm', 'Gamma_kN_m3', 'Angulo_deg', 'Cohesion_kPa', 'Es_kPa', 'UC_Roca_MPa']:
+    for col_n in ['Prof_ini', 'Prof_fin', 'W%', 'Recuperacion_cm', 'RQD_cm', 'Gamma_kN_m3',
+                  'Angulo_deg', 'Cohesion_kPa', 'Es_kPa', 'UC_Roca_MPa']:
         if col_n in df_hum.columns:
             df_hum[col_n] = df_hum[col_n].apply(lambda x: _a_float(x, np.nan))
     df_hum = df_hum.dropna(subset=['Prof_ini', 'Prof_fin']).reset_index(drop=True)
@@ -102,14 +112,14 @@ def procesar_sondeo_sict(xls_path_o_bytes):
     for _, row in df_hum.iterrows():
         p_ini = _a_float(row['Prof_ini'], 0.0)
         p_fin = _a_float(row['Prof_fin'], p_ini + 0.5)
-        espesor = max(0.01, p_fin - p_ini)
+        if p_fin <= p_ini:
+            continue
+        espesor = p_fin - p_ini
         p_med = (p_ini + p_fin) / 2.0
 
         sucs = 'SM'
         tipo = 'Friccionante'
-        f_pct = np.nan
-        ll_val = np.nan
-        lp_val = np.nan
+        f_pct, ll_val, lp_val = np.nan, np.nan, np.nan
         desc = ''
 
         coinc = df_ind[(df_ind['Prof_ini'] <= p_med) & (df_ind['Prof_fin'] >= p_med)]
@@ -175,7 +185,7 @@ def procesar_sondeo_sict(xls_path_o_bytes):
         sigma_v_tot += gamma * espesor
         sigma_v_eff += ((gamma - gamma_w) if bajo_naf else gamma) * espesor
 
-        cn = min(2.0, math.sqrt(100.0 / max(sigma_v_med_eff, 5.0))) if pd.notna(n60) else np.nan
+        cn = min(1.70, math.sqrt(100.0 / max(sigma_v_med_eff, 5.0))) if pd.notna(n60) else np.nan
         n1_60 = min(50.0, n60 * cn) if pd.notna(n60) else np.nan
 
         phi_lab = _a_float(row.get('Angulo_deg', np.nan), np.nan)
@@ -196,17 +206,17 @@ def procesar_sondeo_sict(xls_path_o_bytes):
                 phi_dis = 0.0
             else:
                 c_dis = 0.0
-                phi_dis = round(min(45.0, 27.5 + 0.92 * math.sqrt(max(n1_v, 1.0))), 2)
+                phi_dis = round(min(44.0, 27.0 + 0.30 * n1_v), 2)
 
         if pd.notna(es_lab) and es_lab > 0:
             es_dis = es_lab
         elif tipo == 'Roca':
             es_dis = 250000.0
         elif tipo == 'Cohesivo':
-            es_dis = max(3000.0, 300.0 * max(c_dis, 20.0))
+            es_dis = max(3500.0, 300.0 * max(c_dis, 20.0))
         else:
-            n1_v = n1_60 if pd.notna(n1_60) else 20.0
-            es_dis = max(6000.0, 500.0 * n1_v)
+            n60_v = n60 if pd.notna(n60) else 20.0
+            es_dis = max(6000.0, (4.8 + 1.25 * n60_v) * 1000.0 * 0.35)
 
         w_dec = (w_pct / 100.0) if (pd.notna(w_pct) and w_pct > 0) else (0.28 if tipo == 'Cohesivo' else 0.15)
         gamma_d_tm3 = round((gamma / 9.81) / (1.0 + w_dec), 2)
@@ -221,12 +231,12 @@ def procesar_sondeo_sict(xls_path_o_bytes):
 
         gs_est = 2.70 if tipo == 'Cohesivo' else 2.66
         e0_est = round(max(0.45, w_dec * gs_est), 3)
-        ll_est = ll_val if (pd.notna(ll_val) and ll_val > 15.0) else (42.0 if tipo == 'Cohesivo' else 25.0)
+        ll_est = ll_val if (pd.notna(ll_val) and ll_val > 15.0) else (40.0 if tipo == 'Cohesivo' else 24.0)
         cc_est = round(max(0.05, 0.009 * (ll_est - 10.0)), 3) if tipo == 'Cohesivo' else 0.02
 
         tramos.append({
-            'Prof_ini': p_ini,
-            'Prof_fin': p_fin,
+            'Prof_ini': round(p_ini, 2),
+            'Prof_fin': round(p_fin, 2),
             'P_med': round(p_med, 2),
             'Espesor': round(espesor, 2),
             'SUCS': sucs,
@@ -271,20 +281,11 @@ def procesar_sondeo_sict(xls_path_o_bytes):
 
 
 # ==============================================================================
-# 1. CUMPLIMIENTO DE EXPLORACIÓN Y SUSPENSIÓN DE SONDEO (TdR 1.5.2)
+# 1. CUMPLIMIENTO DE EXPLORACIÓN Y SOCAVACIÓN OPCIONAL (TdR 1.5.2 y 1.5.6)
 # ==============================================================================
 def revisar_criterios_exploracion_sict(df_tramos, prof_desplante_m, ancho_zapata_m=0.0,
                                        en_ladera=False, distancia_horiz_talud_m=0.0,
                                        corte_subrasante_m=0.0):
-    """
-    Verifica automaticamente los criterios obligatorios del numeral 1.5.2 del TdR SICT:
-      1. Penetracion continua >= 6.00 m en arenas/arcillas con N >= 50 golpes, o
-         >= 4.00 m en masa rocosa.
-      2. Que la profundidad maxima del sondeo quede por debajo del nivel de desplante
-         (considerando posibles cortes de subrasante en PIV / PFFCC).
-      3. En laderas/barrancas: espesor explorado >= 1.5*B debajo del desplante y
-         retiro horizontal arista exterior de zapata a talud >= 2.0*B.
-    """
     prof_max = float(df_tramos['Prof_fin'].max()) if not df_tramos.empty else 0.0
     desplante_real = prof_desplante_m + max(0.0, corte_subrasante_m)
 
@@ -301,14 +302,14 @@ def revisar_criterios_exploracion_sict(df_tramos, prof_desplante_m, ancho_zapata
     cumple_suspension = False
     if espesor_roca_fondo >= 4.0:
         cumple_suspension = True
-        criterio_susp_txt = f"CUMPLE: Se verificaron {espesor_roca_fondo:.2f} m continuos en roca (>= 4.00 m TdR 1.5.2)."
+        criterio_susp_txt = f"CUMPLE: {espesor_roca_fondo:.2f} m continuos en roca (>= 4.00 m TdR 1.5.2)."
     elif espesor_rechazo_fondo >= 6.0:
         cumple_suspension = True
-        criterio_susp_txt = f"CUMPLE: Se penetraron {espesor_rechazo_fondo:.2f} m continuos con N >= 50 golpes (>= 6.00 m TdR 1.5.2)."
+        criterio_susp_txt = f"CUMPLE: {espesor_rechazo_fondo:.2f} m continuos con N >= 50 (>= 6.00 m TdR 1.5.2)."
     else:
         criterio_susp_txt = (
-            f"REVISAR (Juicio del Especialista TdR 1.5.2): Prof. explorada = {prof_max:.2f} m "
-            f"(tramo final N>=50: {espesor_rechazo_fondo:.2f} m | roca: {espesor_roca_fondo:.2f} m)."
+            f"A JUICIO DEL ESPECIALISTA (TdR 1.5.2): Prof. explorada = {prof_max:.2f} m "
+            f"(N>=50 al fondo: {espesor_rechazo_fondo:.2f} m | roca: {espesor_roca_fondo:.2f} m)."
         )
 
     espesor_bajo_desplante = prof_max - desplante_real
@@ -320,12 +321,10 @@ def revisar_criterios_exploracion_sict(df_tramos, prof_desplante_m, ancho_zapata
     if en_ladera and ancho_zapata_m > 0:
         req_dist = 2.0 * ancho_zapata_m
         req_esp = 1.5 * ancho_zapata_m
-        ok_d = distancia_horiz_talud_m >= req_dist
-        ok_e = espesor_bajo_desplante >= req_esp
-        cumple_ladera = ok_d and ok_e
+        cumple_ladera = (distancia_horiz_talud_m >= req_dist) and (espesor_bajo_desplante >= req_esp)
         msg_ladera = (
-            f"{'CUMPLE' if cumple_ladera else 'NO CUMPLE'}: Retiro horiz. al talud = {distancia_horiz_talud_m:.2f} m "
-            f"(mín. 2B = {req_dist:.2f} m) | Exploración bajo desplante = {espesor_bajo_desplante:.2f} m (mín. 1.5B = {req_esp:.2f} m)."
+            f"{'CUMPLE' if cumple_ladera else 'NO CUMPLE'}: Retiro horiz. talud = {distancia_horiz_talud_m:.2f} m "
+            f"(mín. 2B = {req_dist:.2f} m) | Bajo desplante = {espesor_bajo_desplante:.2f} m (mín. 1.5B = {req_esp:.2f} m)."
         )
 
     return {
@@ -345,20 +344,13 @@ def revisar_criterios_exploracion_sict(df_tramos, prof_desplante_m, ancho_zapata
     }
 
 
-# ==============================================================================
-# 2. ESTUDIO DE SOCAVACIÓN GENERAL Y LOCAL (TdR 1.5.6.1) — DESHABILITABLE
-# ==============================================================================
-def calcular_socavacion_sict(df_tramos, aplica_socavacion=True, motivo_no_aplica="Cruce sin corriente de agua (ej. PFFCC / PSV / PIV)",
+def calcular_socavacion_sict(df_tramos, aplica_socavacion=True,
+                             motivo_no_aplica="Cruce sin corriente de agua (ej. PFFCC / PSV / PIV)",
                              gasto_diseno_m3s=120.0, ancho_efectivo_m=25.0, tirante_medio_m=2.50,
                              tirante_local_m=2.80, velocidad_aprox_ms=2.40, periodo_retorno_anios=100,
                              ancho_pila_m=1.20, largo_pila_m=3.60, angulo_esviaje_deg=0.0,
                              forma_pila="Circular / Redondeada", metodo_local="Envolvente (Mayor)",
                              dm_manual_mm=None, gamma_d_manual_tm3=None, tipo_cauce_manual="Auto"):
-    """
-    Calcula la socavacion general (Lischtvan-Levediev) y la socavacion local en
-    pilas/apoyos (Yaroslavtziev y Laursen), devolviendo el perfil de socavacion total.
-    Si aplica_socavacion=False, retorna 0.00 m con sustento documental.
-    """
     if not aplica_socavacion:
         return {
             'aplica': False,
@@ -381,7 +373,6 @@ def calcular_socavacion_sict(df_tramos, aplica_socavacion=True, motivo_no_aplica
     Hm = max(0.20, float(tirante_medio_m))
     Ho = max(0.20, float(tirante_local_m))
     Qd = max(0.10, float(gasto_diseno_m3s))
-
     alpha = Qd / (Be * (Hm ** (5.0 / 3.0)))
 
     est0 = df_tramos.iloc[0] if not df_tramos.empty else None
@@ -396,9 +387,7 @@ def calcular_socavacion_sict(df_tramos, aplica_socavacion=True, motivo_no_aplica
     gd_tm3 = float(gamma_d_manual_tm3) if (gamma_d_manual_tm3 is not None and gamma_d_manual_tm3 > 0) else (float(est0['Gamma_d_tm3']) if est0 is not None else 1.45)
 
     if es_roca:
-        Hs = Ho
-        x_exp = 0.0
-        modelo_cauce = "Roca sana (no erosionable)"
+        Hs, x_exp, modelo_cauce = Ho, 0.0, "Roca sana (no erosionable)"
     elif not es_cohesivo:
         x_exp = max(0.22, min(0.43, 0.38 - 0.055 * math.log10(max(dm_mm, 0.05))))
         denom = max(0.01, 0.68 * (dm_mm ** 0.28) * beta)
@@ -419,47 +408,30 @@ def calcular_socavacion_sict(df_tramos, aplica_socavacion=True, motivo_no_aplica
     Fr0 = V0 / math.sqrt(g * Ho)
 
     if "RECT" in forma_pila.upper():
-        k1_laur = 1.10
-        kf_yar = 12.4
+        k1_laur, kf_yar = 1.10, 12.4
     elif "AGUD" in forma_pila.upper() or "LENTIC" in forma_pila.upper():
-        k1_laur = 0.90
-        kf_yar = 10.0
+        k1_laur, kf_yar = 0.90, 10.0
     else:
-        k1_laur = 1.00
-        kf_yar = 8.5
+        k1_laur, kf_yar = 1.00, 8.5
 
     k2_esv = (math.cos(theta_rad) + (lp / bp) * math.sin(theta_rad)) ** 0.65
-
-    soc_laursen = max(0.0, 2.0 * Ho * k1_laur * k2_esv * ((bp / Ho) ** 0.65) * (Fr0 ** 0.43))
+    soc_laursen = 0.0 if es_roca else max(0.0, 2.0 * Ho * k1_laur * k2_esv * ((bp / Ho) ** 0.65) * (Fr0 ** 0.43))
 
     e_yar = 0.60
     fr_pila = V0 / math.sqrt(g * bp)
     kv_yar = max(0.50, min(1.0, 0.85 * (fr_pila ** 0.25)))
     kh_yar = 0.15 * math.log10(max(Ho / bp, 1.05))
     dm_m = dm_mm / 1000.0
-    kf_ef = kf_yar * k2_esv
-    soc_yar = max(0.0, kf_ef * kv_yar * (e_yar + kh_yar) * ((V0 ** 2) / g) - 30.0 * dm_m)
-
-    if es_roca:
-        soc_laursen = 0.0
-        soc_yar = 0.0
+    soc_yar = 0.0 if es_roca else max(0.0, (kf_yar * k2_esv) * kv_yar * (e_yar + kh_yar) * ((V0 ** 2) / g) - 30.0 * dm_m)
 
     met_up = str(metodo_local).upper()
     if "LAURSEN" in met_up:
-        soc_loc = soc_laursen
-        met_lbl = "Laursen"
+        soc_loc, met_lbl = soc_laursen, "Laursen"
     elif "YAROS" in met_up:
-        soc_loc = soc_yar
-        met_lbl = "Yaroslavtziev"
+        soc_loc, met_lbl = soc_yar, "Yaroslavtziev"
     else:
-        if soc_laursen >= soc_yar:
-            soc_loc = soc_laursen
-            met_lbl = "Laursen (Envolvente)"
-        else:
-            soc_loc = soc_yar
-            met_lbl = "Yaroslavtziev (Envolvente)"
-
-    soc_total = soc_gen + soc_loc
+        soc_loc = max(soc_laursen, soc_yar)
+        met_lbl = "Laursen (Envolvente)" if soc_laursen >= soc_yar else "Yaroslavtziev (Envolvente)"
 
     return {
         'aplica': True,
@@ -473,28 +445,237 @@ def calcular_socavacion_sict(df_tramos, aplica_socavacion=True, motivo_no_aplica
         'soc_local_laursen_m': round(soc_laursen, 2),
         'soc_local_yaroslavtziev_m': round(soc_yar, 2),
         'soc_local_adoptada_m': round(soc_loc, 2),
-        'soc_total_m': round(soc_total, 2),
+        'soc_total_m': round(soc_gen + soc_loc, 2),
         'metodo_local_usado': met_lbl
     }
 
 
 # ==============================================================================
-# 3. CIMENTACIÓN SUPERFICIAL AASHTO — CAPACIDAD, DESLIZAMIENTO, VOLTEO (TdR 1.5.8)
+# 2. ETAPA 1: PROPUESTA INICIAL — PILAS INDIVIDUALES AASHTO LRFD (O'NEILL & REESE)
+#    Y ZAPATAS PRELIMINARES (PARA SELECCIÓN ESTRUCTURAL / MINUTA IV)
+# ==============================================================================
+def evaluar_pila_individual_aashto_lrfd(df_tramos, naf_m, D_m, L_m, socavacion_total_m=0.0, fc_kgcm2=280.0):
+    """
+    Calcula la capacidad de carga reducida a compresion (R_R) y a tension/extraccion (R_T)
+    de una pila individual perforada conforme a AASHTO LRFD Bridge Design Specifications
+    (O'Neill & Reese, 1999, Tabla 10.5.5.2.4-1):
+      - Suelos Cohesivos (Metodo alfa): phi_qs = 0.45 (comp), phi_up = 0.35 (tens), phi_qp = 0.40
+      - Suelos Granulares (Metodo beta): phi_qs = 0.55 (comp), phi_up = 0.45 (tens), phi_qp = 0.50
+      - Roca (Horvath & Kenney / CGS):  phi_qs = 0.55 (comp), phi_up = 0.40 (tens), phi_qp = 0.50
+      - Exclusiones de fuste: primeros 1.50 m bajo lecho firme (o socavado) y 1.0*D arriba de la punta.
+    """
+    D = max(0.40, float(D_m))
+    L = max(3.0, float(L_m))
+    z_soc = max(0.0, float(socavacion_total_m))
+    Pa = 100.0
+
+    z_act_ini = z_soc + 1.50
+    z_act_fin = max(z_act_ini, L - 1.0 * D)
+    L_efectiva = max(0.0, z_act_fin - z_act_ini)
+
+    perim = math.pi * D
+    Ap = (math.pi * (D ** 2)) / 4.0
+
+    prof_max_s = float(df_tramos['Prof_fin'].max()) if not df_tramos.empty else L
+    df_ext = df_tramos.copy()
+    if L + 2.0 * D > prof_max_s and not df_ext.empty:
+        ult_fila = df_ext.iloc[-1].copy()
+        ult_fila['Prof_ini'] = prof_max_s
+        ult_fila['Prof_fin'] = L + 2.5 * D
+        ult_fila['Espesor'] = ult_fila['Prof_fin'] - ult_fila['Prof_ini']
+        ult_fila['P_med'] = 0.5 * (ult_fila['Prof_ini'] + ult_fila['Prof_fin'])
+        ult_fila['Sigma_v0_eff'] = ult_fila['Sigma_v0_eff'] + 10.0 * (ult_fila['P_med'] - prof_max_s)
+        df_ext = pd.concat([df_ext, pd.DataFrame([ult_fila])], ignore_index=True)
+
+    Rs_nom_kN = 0.0
+    Rs_comp_red_kN = 0.0
+    Rs_tens_red_kN = 0.0
+    kh_acum = 0.0
+    dz_kh = 0.0
+
+    for _, t in df_ext.iterrows():
+        zi = max(float(t['Prof_ini']), z_act_ini)
+        zf = min(float(t['Prof_fin']), z_act_fin)
+        dz = zf - zi
+        if dz > 0:
+            z_med_tramo = 0.5 * (zi + zf)
+            tipo = str(t['Tipo'])
+            n60_t = float(t['N60']) if pd.notna(t['N60']) else 20.0
+            su_t = max(float(t['c_kPa']), 6.0 * n60_t if tipo == 'Cohesivo' else 0.0)
+            sig_eff = max(15.0, float(t['Sigma_v0_eff']))
+
+            if tipo == 'Roca':
+                qu_kpa = (float(t['UC_MPa']) * 1000.0) if pd.notna(t['UC_MPa']) else 5000.0
+                qs_kpa = min(2500.0, 0.65 * Pa * math.sqrt(qu_kpa / Pa))
+                phi_qs, phi_up = 0.55, 0.40
+            elif tipo == 'Cohesivo':
+                rel_su = su_t / Pa
+                if rel_su <= 1.5:
+                    alpha = 0.55
+                elif rel_su <= 2.5:
+                    alpha = 0.55 - 0.10 * (rel_su - 1.5)
+                else:
+                    alpha = max(0.35, 0.45 - 0.05 * (rel_su - 2.5))
+                qs_kpa = min(200.0, alpha * su_t)
+                phi_qs, phi_up = 0.45, 0.35
+            else:
+                beta_base = max(0.25, min(1.20, 1.50 - 0.245 * math.sqrt(max(z_med_tramo, 1.0))))
+                factor_n = min(1.0, n60_t / 15.0)
+                beta = max(0.25, beta_base * factor_n)
+                qs_kpa = min(190.0, beta * sig_eff)
+                phi_qs, phi_up = 0.55, 0.45
+
+            dRs = perim * qs_kpa * dz
+            Rs_nom_kN += dRs
+            Rs_comp_red_kN += phi_qs * dRs
+            Rs_tens_red_kN += phi_up * dRs
+
+        zi_k = max(float(t['Prof_ini']), z_soc)
+        zf_k = min(float(t['Prof_fin']), L)
+        dz_k = zf_k - zi_k
+        if dz_k > 0:
+            zm_k = 0.5 * (zi_k + zf_k) - z_soc
+            n60_k = float(t['N60']) if pd.notna(t['N60']) else 20.0
+            if str(t['Tipo']) == 'Cohesivo':
+                cu_k = max(float(t['c_kPa']), 6.0 * n60_k, 25.0)
+                kh_tm3 = (67.0 * cu_k) / (D * 9.81)
+            elif str(t['Tipo']) == 'Roca':
+                kh_tm3 = 25000.0 / D
+            else:
+                kh_tm3 = (25.0 * n60_k) * (max(zm_k, 0.5) / D)
+            kh_acum += kh_tm3 * dz_k
+            dz_kh += dz_k
+
+    zp_i, zp_f = L, L + 2.0 * D
+    dz_p, n60_p_ac, su_p_ac, dz_coh_p, dz_roca_p, uc_p_ac = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+    for _, t in df_ext.iterrows():
+        zi = max(float(t['Prof_ini']), zp_i)
+        zf = min(float(t['Prof_fin']), zp_f)
+        dz = zf - zi
+        if dz <= 0:
+            continue
+        tp = str(t['Tipo'])
+        n60_v = float(t['N60']) if pd.notna(t['N60']) else 25.0
+        if tp == 'Roca':
+            dz_roca_p += dz
+            uc_p_ac += (float(t['UC_MPa']) if pd.notna(t['UC_MPa']) else 10.0) * dz
+        elif tp == 'Cohesivo':
+            dz_coh_p += dz
+            su_p_ac += max(float(t['c_kPa']), 6.0 * n60_v, 30.0) * dz
+        else:
+            n60_p_ac += n60_v * dz
+        dz_p += dz
+
+    if dz_roca_p >= 0.5 * max(dz_p, 0.01):
+        uc_med = uc_p_ac / max(dz_roca_p, 0.01)
+        qp_kpa = min(10000.0, 2.5 * uc_med * 1000.0 * 0.35)
+        phi_qp = 0.50
+        Es_base_kpa = 300000.0
+    elif dz_coh_p >= 0.5 * max(dz_p, 0.01):
+        su_med = su_p_ac / max(dz_coh_p, 0.01)
+        Nc_tip = min(9.0, 6.0 * (1.0 + 0.20 * (max(L - z_soc, D) / D)))
+        qp_kpa = min(4000.0, Nc_tip * su_med)
+        phi_qp = 0.40
+        Es_base_kpa = 600.0 * su_med
+    else:
+        dz_fr = max(dz_p - dz_coh_p - dz_roca_p, 0.01)
+        n60_med = n60_p_ac / dz_fr if dz_p > 0 else 35.0
+        qp_kpa = min(2900.0, 57.5 * min(n60_med, 50.0))
+        phi_qp = 0.50
+        Es_base_kpa = 3500.0 * min(n60_med, 50.0)
+
+    Rp_nom_kN = qp_kpa * Ap
+    Rp_comp_red_kN = phi_qp * Rp_nom_kN
+
+    L_enterrada_real = max(0.5, L - z_soc)
+    if naf_m is None or naf_m >= L:
+        L_seca, L_sum = L_enterrada_real, 0.0
+    elif naf_m <= z_soc:
+        L_seca, L_sum = 0.0, L_enterrada_real
+    else:
+        L_seca = naf_m - z_soc
+        L_sum = L - naf_m
+    W_neto_kN = Ap * (L_seca * 24.0 + L_sum * (24.0 - 9.81))
+
+    RR_comp_ton = (Rs_comp_red_kN + Rp_comp_red_kN) / 9.81
+    RT_tens_ton = (Rs_tens_red_kN + 0.90 * W_neto_kN) / 9.81
+
+    Ec_tm2 = 14000.0 * math.sqrt(max(fc_kgcm2, 200.0)) * 10.0
+    xi_fuste = (Rp_comp_red_kN + 0.50 * Rs_comp_red_kN) / max(Rs_comp_red_kN + Rp_comp_red_kN, 1.0)
+    delta_fuste = (xi_fuste * L) / max(Ap * Ec_tm2, 1.0)
+    kv_base_tm3 = Es_base_kpa / (D * (1.0 - 0.30**2) * 9.81)
+    delta_base = 1.0 / max(kv_base_tm3 * Ap, 1.0)
+    Kv_t_cm = (1.0 / (delta_fuste + delta_base)) / 100.0
+    kh_prom_tm3 = kh_acum / max(dz_kh, 0.1)
+
+    return {
+        'D_m': round(D, 2),
+        'L_m': round(L, 2),
+        'L_efectiva_m': round(L_efectiva, 2),
+        'Cf_comp_ton': round(Rs_comp_red_kN / 9.81, 1),
+        'Cp_comp_ton': round(Rp_comp_red_kN / 9.81, 1),
+        'R_comp_ton': round(RR_comp_ton, 1),
+        'Cf_tens_ton': round(Rs_tens_red_kN / 9.81, 1),
+        'W_neto_ton': round(W_neto_kN / 9.81, 1),
+        'R_tens_ton': round(RT_tens_ton, 1),
+        'kh_prom_tm3': round(kh_prom_tm3, 1),
+        'Kv_cabeza_t_cm': round(Kv_t_cm, 2)
+    }
+
+
+def generar_propuesta_inicial_sict(df_tramos, naf_m, diametros_pilas, longitudes_pilas,
+                                   anchos_zapatas, desplantes_zapatas, socavacion_total_m=0.0):
+    filas_pilas = []
+    for l_val in longitudes_pilas:
+        for d_val in diametros_pilas:
+            filas_pilas.append(
+                evaluar_pila_individual_aashto_lrfd(df_tramos, naf_m, d_val, l_val, socavacion_total_m=socavacion_total_m)
+            )
+    df_pilas_prop = pd.DataFrame(filas_pilas)
+
+    mat_pila_comp = df_pilas_prop.pivot(index='L_m', columns='D_m', values='R_comp_ton') if not df_pilas_prop.empty else pd.DataFrame()
+    mat_pila_tens = df_pilas_prop.pivot(index='L_m', columns='D_m', values='R_tens_ton') if not df_pilas_prop.empty else pd.DataFrame()
+    mat_pila_kv = df_pilas_prop.pivot(index='L_m', columns='D_m', values='Kv_cabeza_t_cm') if not df_pilas_prop.empty else pd.DataFrame()
+
+    filas_zap = []
+    for df_v in desplantes_zapatas:
+        for b_v in anchos_zapatas:
+            rz = revisar_zapata_aashto_sict(
+                df_tramos, naf_m, B_m=b_v, L_m=b_v * 2.0, Df_m=df_v,
+                V_ton=100.0, H_B_ton=0.0, H_L_ton=0.0, M_B_tonm=0.0, M_L_tonm=0.0,
+                socavacion_total_m=socavacion_total_m
+            )
+            filas_zap.append({
+                'Df_m': rz['Df_m'],
+                'B_m': rz['B_m'],
+                'q_adm_kgcm2': rz['q_adm_asd_kgcm2'],
+                'q_adm_tm2': rz['q_adm_asd_tm2'],
+                'ks_tm3': rz['ks_tm3'],
+                'excede_4m_tdr': rz['excede_4m_tdr']
+            })
+    df_zap_prop = pd.DataFrame(filas_zap)
+    mat_zap_qadm = df_zap_prop.pivot(index='Df_m', columns='B_m', values='q_adm_tm2') if not df_zap_prop.empty else pd.DataFrame()
+    mat_zap_kgcm2 = df_zap_prop.pivot(index='Df_m', columns='B_m', values='q_adm_kgcm2') if not df_zap_prop.empty else pd.DataFrame()
+
+    return {
+        'df_pilas': df_pilas_prop,
+        'mat_pila_comp_ton': mat_pila_comp,
+        'mat_pila_tens_ton': mat_pila_tens,
+        'mat_pila_kv_tcm': mat_pila_kv,
+        'df_zapatas': df_zap_prop,
+        'mat_zap_qadm_tm2': mat_zap_qadm,
+        'mat_zap_qadm_kgcm2': mat_zap_kgcm2
+    }
+
+
+# ==============================================================================
+# 3. CIMENTACIÓN SUPERFICIAL DEFINITIVA AASHTO (TdR 1.5.8)
 # ==============================================================================
 def revisar_zapata_aashto_sict(df_tramos, naf_m, B_m, L_m, Df_m,
                                V_ton, H_B_ton=0.0, H_L_ton=0.0, M_B_tonm=0.0, M_L_tonm=0.0,
                                socavacion_total_m=0.0, es_sismo=False,
                                FS_capacidad=3.0, FS_deslizamiento_min=1.50, FS_volteo_min=2.00,
                                phi_b_lrfd=0.45, nu=0.30):
-    """
-    Revisa los Estados Limite de Falla y Servicio de una zapata/estribo de puente
-    conforme a AASHTO y el numeral 1.5.8 del TdR SICT:
-      - Capacidad de carga con excentricidades (B', L') e inclinacion de carga
-      - Estabilidad por deslizamiento
-      - Estabilidad por volteo y ubicacion de la resultante
-      - Asentamientos elasticos
-      - Regla obligatoria TdR 1.5.8: si Df > 4.00 m -> proponer cimentacion profunda.
-    """
     gamma_w = 9.81
     Df_ef = max(0.0, Df_m - max(0.0, socavacion_total_m))
     excede_4m_tdr = (Df_m > 4.00)
@@ -513,8 +694,7 @@ def revisar_zapata_aashto_sict(df_tramos, naf_m, B_m, L_m, Df_m,
 
     z_b_ini = Df_m
     z_b_fin = Df_m + 1.5 * B_m
-    peso_z = 0.0
-    c_ac, tanp_ac, gam_ac, es_inv_ac = 0.0, 0.0, 0.0, 0.0
+    peso_z, c_ac, tanp_ac, gam_ac, es_inv_ac = 0.0, 0.0, 0.0, 0.0, 0.0
 
     for _, t in df_tramos.iterrows():
         ov_i = max(t['Prof_ini'], z_b_ini)
@@ -556,10 +736,7 @@ def revisar_zapata_aashto_sict(df_tramos, naf_m, B_m, L_m, Df_m,
 
     B_eff = max(0.15, B_m - 2.0 * e_B)
     L_eff = max(0.15, L_m - 2.0 * e_L)
-    if B_eff > L_eff:
-        B_p, L_p = L_eff, B_eff
-    else:
-        B_p, L_p = B_eff, L_eff
+    B_p, L_p = (L_eff, B_eff) if B_eff > L_eff else (B_eff, L_eff)
     Area_eff = B_eff * L_eff
 
     q_act_tm2 = V_safe / Area_eff
@@ -568,9 +745,7 @@ def revisar_zapata_aashto_sict(df_tramos, naf_m, B_m, L_m, Df_m,
 
     phi_r = math.radians(phi_bulbo)
     if phi_bulbo <= 0.05:
-        nq = 1.0
-        nc = 5.14
-        ng = 0.0
+        nq, nc, ng = 1.0, 5.14, 0.0
     else:
         nq = math.exp(math.pi * math.tan(phi_r)) * (math.tan(math.radians(45.0 + phi_bulbo / 2.0)) ** 2)
         nc = (nq - 1.0) / math.tan(phi_r)
@@ -622,10 +797,13 @@ def revisar_zapata_aashto_sict(df_tramos, naf_m, B_m, L_m, Df_m,
     m_asp = max(1.0, L_p / max(B_p, 0.15))
     If_flex = (2.0 / math.pi) * (math.log(m_asp + math.sqrt(m_asp**2 + 1.0)) + m_asp * math.log((1.0 + math.sqrt(m_asp**2 + 1.0)) / m_asp))
     If_rig = 0.80 * If_flex
+    denom_ks = max(B_p * (1.0 - nu**2) * If_rig, 1e-4)
+    ks_tm3 = (max(es_bulbo, 500.0) / denom_ks) / 9.81
+
     q_neta_act_kpa = max(0.0, q_act_kpa - q_sobrecarga)
-    se_m = (q_neta_act_kpa * B_p * (1.0 - nu**2) * If_rig) / max(es_bulbo, 500.0)
+    se_m = (q_neta_act_kpa * denom_ks) / max(es_bulbo, 500.0)
     se_cm = se_m * 100.0
-    cumple_asentamiento = (se_cm <= 2.54)
+    cumple_asentamiento = (se_cm <= 2.50)
 
     kpa_kgcm2 = 0.01019716
     cumple_global = cumple_capacidad and cumple_deslizamiento and cumple_volteo and cumple_excentricidad and cumple_asentamiento and (not excede_4m_tdr)
@@ -656,6 +834,7 @@ def revisar_zapata_aashto_sict(df_tramos, naf_m, B_m, L_m, Df_m,
         'q_adm_asd_tm2': round(q_adm_asd_kpa / 9.81, 2),
         'q_adm_asd_kgcm2': round(q_adm_asd_kpa * kpa_kgcm2, 2),
         'q_res_lrfd_kgcm2': round(q_res_lrfd_kpa * kpa_kgcm2, 2),
+        'ks_tm3': round(ks_tm3, 0),
         'FS_cap_calc': round(fs_cap_calc, 2),
         'FS_cap_req': round(fs_cap_req, 2),
         'cumple_capacidad': cumple_capacidad,
@@ -674,17 +853,12 @@ def revisar_zapata_aashto_sict(df_tramos, naf_m, B_m, L_m, Df_m,
 
 
 # ==============================================================================
-# 4. PILAS / PILOTES: MÉTODO DE DAVISSON Y ROBINSON (1965) — PANDEO Y EMPOTRAMIENTO (TdR 1.5.8)
+# 4. MÉTODO DE DAVISSON Y ROBINSON (1965) Y MÉTODO LATERAL DE BROMS (1964)
 # ==============================================================================
 def analizar_davisson_robinson_sict(df_tramos, naf_m, D_m, L_enterrada_m,
                                     P_axial_act_ton=150.0, altura_libre_col_m=0.0,
                                     socavacion_total_m=0.0, fc_kgcm2=250.0,
                                     condicion_cabeza="Articulada - Traslación Impedida (K = 0.80)"):
-    """
-    Determina la longitud minima de empotramiento lateral, el punto de fijacion
-    equivalente (zf) y la carga critica de pandeo elastico (Pcr) mediante el
-    metodo de Davisson y Robinson (1965), exigido en el numeral 1.5.8 del TdR SICT.
-    """
     D = max(0.40, float(D_m))
     L_tot = max(2.0, float(L_enterrada_m))
     z_soc = max(0.0, float(socavacion_total_m))
@@ -699,8 +873,7 @@ def analizar_davisson_robinson_sict(df_tramos, naf_m, D_m, L_enterrada_m,
     EpIp_kNm2 = Ep_kpa * Ip_m4
     rg_m = D / 4.0
 
-    z_sup = z_soc
-    z_inf = z_soc + 8.0 * D
+    z_sup, z_inf = z_soc, z_soc + 8.0 * D
     dz_tot, dz_coh, cu_ac, n60_ac = 0.0, 0.0, 0.0, 0.0
 
     for _, t in df_tramos.iterrows():
@@ -728,8 +901,7 @@ def analizar_davisson_robinson_sict(df_tramos, naf_m, D_m, L_enterrada_m,
         cu_med = (cu_ac / max(dz_coh, 0.01)) if dz_coh > 0 else 50.0
         Kh_kpa = 67.0 * cu_med
         R_m = (EpIp_kNm2 / max(Kh_kpa, 100.0)) ** 0.25
-        zf_m = 1.40 * R_m
-        L_emp_min_m = 4.0 * R_m
+        zf_m, L_emp_min_m = 1.40 * R_m, 4.0 * R_m
         modelo_dr = f"Módulo Constante Cohesivo (Kh = {Kh_kpa:.0f} kPa, R = {R_m:.2f} m)"
         param_rigidez_m = R_m
     else:
@@ -738,8 +910,7 @@ def analizar_davisson_robinson_sict(df_tramos, naf_m, D_m, L_enterrada_m,
         nh_seco = 250.0 * max(n60_med, 4.0)
         nh_kNm3 = (0.60 * nh_seco) if sumergido else nh_seco
         T_m = (EpIp_kNm2 / max(nh_kNm3, 200.0)) ** 0.20
-        zf_m = 1.80 * T_m
-        L_emp_min_m = 4.0 * T_m
+        zf_m, L_emp_min_m = 1.80 * T_m, 4.0 * T_m
         modelo_dr = f"Módulo Lineal Friccionante (nh = {nh_kNm3:.0f} kN/m³, T = {T_m:.2f} m)"
         param_rigidez_m = T_m
 
@@ -758,9 +929,7 @@ def analizar_davisson_robinson_sict(df_tramos, naf_m, D_m, L_enterrada_m,
     L_eq_pandeo = K_eff * L_cantilever_eq
     esbeltez_kl_r = L_eq_pandeo / rg_m
 
-    P_cr_kN = (math.pi ** 2) * EpIp_kNm2 / max(L_eq_pandeo ** 2, 0.25)
-    P_cr_ton = P_cr_kN / 9.81
-
+    P_cr_ton = ((math.pi ** 2) * EpIp_kNm2 / max(L_eq_pandeo ** 2, 0.25)) / 9.81
     Area_pila_cm2 = (math.pi * ((D * 100.0) ** 2)) / 4.0
     P_plast_concreto_ton = (0.85 * fc_kgcm2 * Area_pila_cm2) / 1000.0
 
@@ -801,27 +970,330 @@ def analizar_davisson_robinson_sict(df_tramos, naf_m, D_m, L_enterrada_m,
     }
 
 
+def analizar_capacidad_lateral_broms(df_tramos, naf_m, D_m, L_efec_lat_m,
+                                     H_pila_act_ton=25.0, e_brazo_m=0.0):
+    """
+    Calcula la capacidad lateral ultima y admisible del suelo (FS=2.0) y el
+    momento resistente / maximo por pilote mediante el metodo de Broms (1964).
+    """
+    b = max(0.40, float(D_m))
+    # En pilotes largos (L > 6.5*D), la reaccion pasiva lateral efectiva de Broms se moviliza en el tramo superior (6.5*D)
+    L = min(max(2.0, float(L_efec_lat_m)), 6.5 * b)
+    e = max(0.0, float(e_brazo_m))
+    P_act = max(0.10, float(H_pila_act_ton))
+
+    z_lim = 6.0 * b
+    dz_t, dz_c, cu_ac, phi_ac, gam_ac = 0.0, 0.0, 0.0, 0.0, 0.0
+    for _, t in df_tramos.iterrows():
+        ov_f = min(float(t['Prof_fin']), z_lim)
+        dz = ov_f - float(t['Prof_ini'])
+        if dz <= 0:
+            continue
+        gam_ef = (float(t['Gamma']) - 9.81) if (naf_m is not None and float(t['P_med']) > naf_m) else float(t['Gamma'])
+        gam_ac += max(5.0, gam_ef) * dz
+        if t['Tipo'] == 'Cohesivo':
+            dz_c += dz
+            cu_ac += max(float(t['c_kPa']), 25.0) * dz
+        else:
+            phi_ac += max(float(t['phi_deg']), 28.0) * dz
+        dz_t += dz
+
+    gam_tm3 = ((gam_ac / max(dz_t, 0.01)) if dz_t > 0 else 17.5) / 9.81
+    es_cohesivo = (dz_c >= 0.5 * dz_t) if dz_t > 0 else False
+
+    if not es_cohesivo:
+        phi_med = (phi_ac / max(dz_t - dz_c, 0.01)) if (dz_t - dz_c) > 0 else 32.0
+        Kp = math.tan(math.radians(45.0 + phi_med / 2.0)) ** 2
+        Pt_ult_ton = (0.5 * gam_tm3 * b * (L ** 3) * Kp) / max(e + L, 0.5)
+        Mt_ult_tonm = 0.5 * gam_tm3 * b * (L ** 3) * Kp
+        f_m = min(L, 0.816 * math.sqrt(P_act / max(gam_tm3 * b * Kp, 0.01)))
+        M_max_act_tonm = P_act * (e + 0.67 * f_m)
+    else:
+        cu_tm2 = ((cu_ac / max(dz_c, 0.01)) if dz_c > 0 else 50.0) / 9.81
+        L_util = max(0.5, L - 1.5 * b)
+        Pt_ult_ton = (2.25 * cu_tm2 * b * (L_util ** 2)) / max(1.0 + (e / max(L_util, 0.5)), 1.0)
+        Mt_ult_tonm = 2.25 * cu_tm2 * b * (L_util ** 2)
+        f_m = min(L_util, P_act / max(9.0 * cu_tm2 * b, 0.1))
+        M_max_act_tonm = P_act * (e + 1.5 * b + 0.5 * f_m)
+
+    Pt_adm_ton = Pt_ult_ton / 2.0
+    Mt_adm_tonm = Mt_ult_tonm / 1.5
+
+    return {
+        'Pt_ult_pila_ton': round(Pt_ult_ton, 1),
+        'Pt_adm_pila_ton': round(Pt_adm_ton, 1),
+        'Mt_ult_pila_tonm': round(Mt_ult_tonm, 1),
+        'Mt_adm_pila_tonm': round(Mt_adm_tonm, 1),
+        'f_prof_mmax_m': round(f_m, 2),
+        'M_max_act_pila_tonm': round(M_max_act_tonm, 1),
+        'cumple_lateral_broms': (P_act <= Pt_adm_ton)
+    }
+
+
 # ==============================================================================
-# 5. EMPUJE DE TIERRAS EN ESTRIBOS Y MUROS (Rankine + Mononobe-Okabe, SICT)
+# 5. ETAPA 2: REVISIÓN DEFINITIVA DE GRUPO DE PILOTES POR APOYO
+#    (Capacidad Grupo AASHTO 10.7.3.9 + Tensión + Poulos 1994 + Broms + Davisson)
+# ==============================================================================
+def _calcular_asentamiento_grupo_poulos(df_tramos, D_m, L_m, nx, ny, sep_m, Q_grupo_ton, pred_punta=False, fc_kgcm2=280.0):
+    n_tot = max(1, int(nx) * int(ny))
+    if n_tot == 1:
+        A_grupo = (math.pi * (D_m ** 2)) / 4.0
+        d_e = D_m
+    else:
+        Bg = (max(1, int(nx)) - 1) * sep_m + D_m
+        Lg = (max(1, int(ny)) - 1) * sep_m + D_m
+        A_grupo = Bg * Lg
+        d_e = (1.13 if pred_punta else 1.27) * math.sqrt(A_grupo)
+
+    es_fuste_ac, dz_f = 0.0, 0.0
+    for _, t in df_tramos.iterrows():
+        zf = min(float(t['Prof_fin']), L_m)
+        dz = zf - float(t['Prof_ini'])
+        if dz <= 0:
+            continue
+        es_fuste_ac += max(float(t['Es_kPa']), 4000.0) * dz
+        dz_f += dz
+    Es_fuste_kpa = (es_fuste_ac / max(dz_f, 0.1)) if dz_f > 0 else 15000.0
+
+    eb_ac, dz_b = 0.0, 0.0
+    for _, t in df_tramos.iterrows():
+        zi = max(float(t['Prof_ini']), L_m)
+        zf = min(float(t['Prof_fin']), L_m + 3.0 * d_e)
+        dz = zf - zi
+        if dz <= 0:
+            continue
+        eb_ac += max(float(t['Es_kPa']), 8000.0) * dz
+        dz_b += dz
+    if dz_b > 0:
+        Eb_kpa = eb_ac / dz_b
+    elif not df_tramos.empty:
+        Eb_kpa = max(float(df_tramos.iloc[-1]['Es_kPa']) * 1.5, 20000.0)
+    else:
+        Eb_kpa = 25000.0
+
+    rel_L_de = max(0.2, min(10.0, L_m / max(d_e, 0.4)))
+    rel_Eb_Es = max(1.0, min(100.0, Eb_kpa / max(Es_fuste_kpa, 1000.0)))
+
+    x_lde = [0.0, 1.0, 2.0, 3.0, 5.0, 10.0]
+    curva_eb1 = [0.46, 0.37, 0.30, 0.25, 0.21, 0.17]
+    curva_eb2 = [0.34, 0.25, 0.21, 0.19, 0.17, 0.15]
+    curva_eb5 = [0.18, 0.13, 0.12, 0.12, 0.125, 0.12]
+    curva_eb10 = [0.09, 0.08, 0.08, 0.085, 0.10, 0.10]
+    curva_eb100 = [0.01, 0.025, 0.04, 0.05, 0.07, 0.08]
+
+    i1 = float(np.interp(rel_L_de, x_lde, curva_eb1))
+    i2 = float(np.interp(rel_L_de, x_lde, curva_eb2))
+    i5 = float(np.interp(rel_L_de, x_lde, curva_eb5))
+    i10 = float(np.interp(rel_L_de, x_lde, curva_eb10))
+    i100 = float(np.interp(rel_L_de, x_lde, curva_eb100))
+
+    Is = float(np.interp(math.log10(rel_Eb_Es), [0.0, math.log10(2), math.log10(5), 1.0, 2.0], [i1, i2, i5, i10, i100]))
+
+    Q_kN = max(0.0, float(Q_grupo_ton)) * 9.81
+    S_grupo_mm = ((Q_kN * Is) / max(d_e * Es_fuste_kpa, 100.0)) * 1000.0
+
+    return {
+        'd_e_m': round(d_e, 2),
+        'Is_poulos': round(Is, 3),
+        'asentamiento_mm': round(S_grupo_mm, 1),
+        'cumple_servicio_25mm': (S_grupo_mm <= 25.0)
+    }
+
+
+def revisar_apoyo_definitivo_sict(df_tramos, naf_m, fila_apoyo, socavacion_total_m=0.0):
+    nombre_ap = str(fila_apoyo.get('Apoyo', 'Apoyo 1'))
+    tipo_cim = str(fila_apoyo.get('Tipo_Cimentacion', 'Grupo de Pilas'))
+    elev_ntn = _a_float(fila_apoyo.get('Elev_NTN_msnm', 100.0), 100.0)
+    df_zap_cabezal = max(0.5, _a_float(fila_apoyo.get('Df_Cabezal_Zapata_m', 2.0), 2.0))
+    elev_desp_zap = elev_ntn - df_zap_cabezal
+
+    V_comp = max(0.0, _a_float(fila_apoyo.get('V_Comp_ton', 400.0), 400.0))
+    T_tens = max(0.0, _a_float(fila_apoyo.get('T_Tens_ton', 0.0), 0.0))
+    Hx = _a_float(fila_apoyo.get('Hx_ton', 25.0), 25.0)
+    Hy = _a_float(fila_apoyo.get('Hy_ton', 10.0), 10.0)
+    Mx = _a_float(fila_apoyo.get('Mx_tonm', 40.0), 40.0)
+    My = _a_float(fila_apoyo.get('My_tonm', 80.0), 80.0)
+    H_res = math.hypot(Hx, Hy)
+
+    if "ZAPATA" in tipo_cim.upper():
+        B_z = max(0.8, _a_float(fila_apoyo.get('B_Zapata_m', 3.5), 3.5))
+        L_z = max(B_z, _a_float(fila_apoyo.get('L_Zapata_m', 8.0), 8.0))
+        rz = revisar_zapata_aashto_sict(
+            df_tramos, naf_m, B_m=B_z, L_m=L_z, Df_m=df_zap_cabezal,
+            V_ton=max(V_comp, 1.0), H_B_ton=Hx, H_L_ton=Hy, M_B_tonm=My, M_L_tonm=Mx,
+            socavacion_total_m=socavacion_total_m
+        )
+        return {
+            'Apoyo': nombre_ap,
+            'Tipo_Cimentacion': 'Zapata Aislada',
+            'Arreglo': f"B={B_z:.2f}x{L_z:.2f} m",
+            'N_Pilas': 0,
+            'D_m': np.nan,
+            'Elev_NTN_msnm': round(elev_ntn, 3),
+            'Elev_Desplante_Zap_msnm': round(elev_desp_zap, 3),
+            'Elev_Desplante_Pilas_msnm': np.nan,
+            'L_Total_m': round(df_zap_cabezal, 2),
+            'L_Efectiva_m': round(rz['Df_efectivo_m'], 2),
+            'V_Comp_Act_ton': round(V_comp, 1),
+            'Cap_Comp_Indiv_ton': np.nan,
+            'Cap_Comp_Grupo_ton': round(rz['q_adm_asd_tm2'] * rz['Area_eff_m2'], 1),
+            'T_Tens_Act_ton': round(T_tens, 1),
+            'T_Max_Pila_Crit_ton': np.nan,
+            'Cap_Tens_Pila_Ef_ton': np.nan,
+            'Cap_Tens_Grupo_ton': 0.0,
+            'Asentamiento_mm': rz['Se_mm'],
+            'H_Act_ton': round(H_res, 1),
+            'H_Adm_Grupo_ton': rz['R_desl_ton'],
+            'M_Max_Act_tonm': round(max(abs(Mx), abs(My)), 1),
+            'M_Adm_Grupo_tonm': round(V_comp * (B_z / 2.0) / rz['FS_volt_req'], 1),
+            'L_Min_Davisson_m': np.nan,
+            'FS_Pandeo': np.nan,
+            'Estado': 'CUMPLE' if (rz['cumple_global'] and T_tens <= 0.1) else 'REVISAR',
+            'detalle_zapata': rz
+        }
+
+    nx = max(1, int(_a_float(fila_apoyo.get('Pilas_nx', 2), 2)))
+    ny = max(1, int(_a_float(fila_apoyo.get('Pilas_ny', 2), 2)))
+    n_pilas = nx * ny
+    D = max(0.50, _a_float(fila_apoyo.get('D_Pila_m', 1.20), 1.20))
+    L_pila = max(4.0, _a_float(fila_apoyo.get('L_Pila_m', 18.0), 18.0))
+    rel_s_d = max(2.5, _a_float(fila_apoyo.get('Sep_entre_D', 3.0), 3.0))
+    S_m = rel_s_d * D
+
+    elev_desp_pilas = elev_desp_zap - L_pila
+    prof_punta_desde_ntn = df_zap_cabezal + L_pila
+
+    z_ini_pila = max(df_zap_cabezal, socavacion_total_m)
+    res_1p = evaluar_pila_individual_aashto_lrfd(
+        df_tramos, naf_m, D_m=D, L_m=prof_punta_desde_ntn, socavacion_total_m=z_ini_pila
+    )
+    Rc_1 = res_1p['R_comp_ton']
+    Rt_1 = res_1p['R_tens_ton']
+    L_efec_pila = max(0.5, L_pila - 1.50 - 1.0 * D)
+
+    est_sup = df_tramos.iloc[0] if not df_tramos.empty else None
+    es_arcilla_blanda = (est_sup is not None and est_sup['Tipo'] == 'Cohesivo' and est_sup['c_kPa'] < 50.0)
+    if n_pilas == 1:
+        eta_comp, eta_tens = 1.00, 1.00
+    else:
+        eta_comp = float(np.interp(rel_s_d, [2.5, 6.0], [0.65, 1.00])) if es_arcilla_blanda else 1.00
+        eta_tens = float(np.interp(rel_s_d, [2.5, 4.0], [0.67, 1.00]))
+
+    Bg = (nx - 1) * S_m + D
+    Lg = (ny - 1) * S_m + D
+    if n_pilas > 1:
+        perim_blq = 2.0 * (Bg + Lg)
+        area_blq = Bg * Lg
+        c_med_blq = float(df_tramos['c_kPa'].mean()) if not df_tramos.empty else 40.0
+        su_eq = max(c_med_blq, 50.0)
+        R_blq_comp_ton = (0.55 * (perim_blq * L_pila * su_eq + 9.0 * su_eq * area_blq)) / 9.81
+        W_blq_ton = (area_blq * L_pila * 18.0) / 9.81
+        R_blq_tens_ton = (0.45 * (perim_blq * L_pila * su_eq)) / 9.81 + 0.90 * W_blq_ton
+        Rc_grupo = min(n_pilas * Rc_1 * eta_comp, R_blq_comp_ton) if es_arcilla_blanda else (n_pilas * Rc_1 * eta_comp)
+        Rt_grupo = min(n_pilas * Rt_1 * eta_tens, R_blq_tens_ton)
+    else:
+        Rc_grupo, Rt_grupo = Rc_1, Rt_1
+
+    B_cab = Bg + 0.70 if n_pilas > 1 else (D + 0.60)
+    L_cab = Lg + 0.70 if n_pilas > 1 else (D + 0.60)
+    h_cab = max(1.20, 1.20 * D)
+    W_cab_ton = (B_cab * L_cab * h_cab * 24.0) / 9.81
+
+    xs = np.linspace(-(nx - 1) * S_m / 2.0, (nx - 1) * S_m / 2.0, nx) if nx > 1 else np.array([0.0])
+    ys = np.linspace(-(ny - 1) * S_m / 2.0, (ny - 1) * S_m / 2.0, ny) if ny > 1 else np.array([0.0])
+    sum_x2 = ny * float(np.sum(xs ** 2))
+    sum_y2 = nx * float(np.sum(ys ** 2))
+    x_max = float(np.max(np.abs(xs)))
+    y_max = float(np.max(np.abs(ys)))
+
+    My_tot = abs(My) + abs(Hx) * h_cab
+    Mx_tot = abs(Mx) + abs(Hy) * h_cab
+
+    dP_My = (My_tot * x_max / sum_x2) if sum_x2 > 1e-4 else 0.0
+    dP_Mx = (Mx_tot * y_max / sum_y2) if sum_y2 > 1e-4 else 0.0
+
+    P_comp_max_pila = ((V_comp + W_cab_ton) / n_pilas) + dP_My + dP_Mx
+    if T_tens > 0.01:
+        T_max_pila = max(0.0, ((T_tens - 0.90 * W_cab_ton) / n_pilas) + dP_My + dP_Mx)
+    else:
+        T_max_pila = max(0.0, dP_My + dP_Mx - ((0.90 * V_comp + 0.90 * W_cab_ton) / n_pilas))
+
+    Rt_pila_ef = Rt_1 * eta_tens
+    Rc_pila_ef = Rc_1 * eta_comp
+
+    ok_comp = (V_comp <= Rc_grupo) and (P_comp_max_pila <= Rc_pila_ef * 1.05)
+    ok_tens = (T_tens <= Rt_grupo) and (T_max_pila <= Rt_pila_ef)
+
+    pred_punta = (res_1p['Cp_comp_ton'] > res_1p['Cf_comp_ton'])
+    res_poulos = _calcular_asentamiento_grupo_poulos(
+        df_tramos, D_m=D, L_m=L_pila, nx=nx, ny=ny, sep_m=S_m, Q_grupo_ton=V_comp, pred_punta=pred_punta
+    )
+
+    p_mult_lat = 0.75 if n_pilas > 1 else 1.00
+    H_por_pila = H_res / n_pilas
+    res_broms = analizar_capacidad_lateral_broms(
+        df_tramos, naf_m, D_m=D, L_efec_lat_m=max(3.0, L_pila), H_pila_act_ton=H_por_pila / p_mult_lat, e_brazo_m=0.0
+    )
+    H_adm_grupo = res_broms['Pt_adm_pila_ton'] * n_pilas * p_mult_lat
+    M_adm_grupo = res_broms['Mt_adm_pila_tonm'] * n_pilas * p_mult_lat
+
+    h_libre_soc = max(0.0, socavacion_total_m - df_zap_cabezal)
+    res_dr = analizar_davisson_robinson_sict(
+        df_tramos, naf_m, D_m=D, L_enterrada_m=L_pila,
+        P_axial_act_ton=max(P_comp_max_pila, 10.0), altura_libre_col_m=h_libre_soc,
+        socavacion_total_m=z_ini_pila
+    )
+
+    cumple_todo = ok_comp and ok_tens and res_poulos['cumple_servicio_25mm'] and (H_res <= H_adm_grupo) and res_dr['cumple_pandeo']
+
+    return {
+        'Apoyo': nombre_ap,
+        'Tipo_Cimentacion': 'Grupo de Pilas' if n_pilas > 1 else 'Pila Individual',
+        'Arreglo': f"{n_pilas} pilas ({nx}x{ny}) @ {S_m:.2f}m",
+        'N_Pilas': n_pilas,
+        'D_m': round(D, 2),
+        'Elev_NTN_msnm': round(elev_ntn, 3),
+        'Elev_Desplante_Zap_msnm': round(elev_desp_zap, 3),
+        'Elev_Desplante_Pilas_msnm': round(elev_desp_pilas, 3),
+        'L_Total_m': round(L_pila, 2),
+        'L_Efectiva_m': round(L_efec_pila, 2),
+        'V_Comp_Act_ton': round(V_comp, 1),
+        'P_Max_Pila_Comp_ton': round(P_comp_max_pila, 1),
+        'Cap_Comp_Indiv_ton': round(Rc_1, 1),
+        'Cap_Comp_Grupo_ton': round(Rc_grupo, 1),
+        'T_Tens_Act_ton': round(T_tens, 1),
+        'T_Max_Pila_Crit_ton': round(T_max_pila, 1),
+        'Cap_Tens_Pila_Ef_ton': round(Rt_pila_ef, 1),
+        'Cap_Tens_Grupo_ton': round(Rt_grupo, 1),
+        'Asentamiento_mm': res_poulos['asentamiento_mm'],
+        'H_Act_ton': round(H_res, 1),
+        'H_Adm_Grupo_ton': round(H_adm_grupo, 1),
+        'M_Max_Act_tonm': round(res_broms['M_max_act_pila_tonm'] * n_pilas, 1),
+        'M_Adm_Grupo_tonm': round(M_adm_grupo, 1),
+        'L_Min_Davisson_m': res_dr['L_emp_min_requerida_m'],
+        'FS_Pandeo': res_dr['FS_pandeo'],
+        'Estado': 'CUMPLE' if cumple_todo else 'REVISAR',
+        'detalle_poulos': res_poulos,
+        'detalle_broms': res_broms,
+        'detalle_davisson': res_dr
+    }
+
+
+# ==============================================================================
+# 6. ETAPA 3: EMPUJES METRO A METRO EN MUROS, EXCAVACIONES Y TERRAPLENES
 # ==============================================================================
 def calcular_empujes_muros_sict(altura_muro_m=6.0, gamma_relleno_kNm3=19.0,
                                 phi_relleno_deg=32.0, c_relleno_kpa=0.0,
                                 beta_talud_relleno_deg=0.0, h_eq_sobrecarga_m=0.60,
                                 kh_sismico=0.12, kv_sismico=0.0):
-    """
-    Calcula coeficientes y diagramas de empuje de tierras estatico (activo Ka,
-    en reposo K0, pasivo Kp) y dinamico sismico (Mononobe-Okabe Kae) para el
-    diseno de estribos, aleros y muros de contencion (Normas SICT N-PRY-CAR-6-01).
-    """
     H = max(1.0, float(altura_muro_m))
     gam = max(14.0, float(gamma_relleno_kNm3))
+    gam_tm3 = gam / 9.81
     phi = max(15.0, min(45.0, float(phi_relleno_deg)))
     c = max(0.0, float(c_relleno_kpa))
     beta = max(0.0, min(phi - 1.0, float(beta_talud_relleno_deg)))
 
-    phi_r = math.radians(phi)
-    beta_r = math.radians(beta)
-
+    phi_r, beta_r = math.radians(phi), math.radians(beta)
     K0 = 1.0 - math.sin(phi_r)
     cos_b = math.cos(beta_r)
     raiz_r = math.sqrt(max(0.0, (cos_b ** 2) - (math.cos(phi_r) ** 2)))
@@ -837,16 +1309,36 @@ def calcular_empujes_muros_sict(altura_muro_m=6.0, gamma_relleno_kNm3=19.0,
         Kae = Ka * 1.50
     else:
         num_mo = math.cos(phi_r - psi_r) ** 2
-        raiz_mo = math.sqrt(
-            (math.sin(phi_r) * math.sin(phi_r - psi_r - beta_r)) /
-            max(math.cos(psi_r) * math.cos(beta_r), 1e-5)
-        )
+        raiz_mo = math.sqrt((math.sin(phi_r) * math.sin(phi_r - psi_r - beta_r)) / max(math.cos(psi_r) * math.cos(beta_r), 1e-5))
         den_mo = math.cos(psi_r) * ((1.0 + raiz_mo) ** 2)
         Kae = (1.0 - kv) * (num_mo / max(den_mo, 1e-5))
 
     delta_Kae = max(0.0, Kae - Ka)
-
     q_sc_kpa = gam * max(0.0, float(h_eq_sobrecarga_m))
+    q_sc_tm2 = q_sc_kpa / 9.81
+
+    cotas_z = sorted(list(set([float(z) for z in range(0, int(math.floor(H)) + 1)] + [round(H, 2)])))
+    filas_z = []
+    for z in cotas_z:
+        pa_suelo_tm2 = Ka * gam_tm3 * z
+        ea_suelo_tm = 0.5 * pa_suelo_tm2 * z
+        ea_sc_tm = (Ka * q_sc_tm2) * z
+        ea_est_tm = ea_suelo_tm + ea_sc_tm
+        de_sis_tm = 0.5 * gam_tm3 * (z ** 2) * delta_Kae
+        z_ap = (z / 3.0) if z > 0 else 0.0
+        filas_z.append({
+            'H (m)': round(z, 2),
+            'Ka': round(Ka, 3),
+            'Pa (t/m²)': round(pa_suelo_tm2, 2),
+            'Ea Relleno (t/m)': round(ea_suelo_tm, 2),
+            'Ea + Sobrecarga (t/m)': round(ea_est_tm, 2),
+            'ΔE Sismo (t/m)': round(de_sis_tm, 2),
+            'Ea Sísmico Total (t/m)': round(ea_est_tm + de_sis_tm, 2),
+            'Punto Aplicación (m)': round(z_ap, 2),
+            'Kp': round(Kp, 2)
+        })
+    df_empujes_z = pd.DataFrame(filas_z)
+
     Ea_relleno_kNm = max(0.0, 0.5 * gam * (H ** 2) * Ka - 2.0 * c * H * math.sqrt(Ka))
     Ea_sc_kNm = q_sc_kpa * H * Ka
     E0_reposo_kNm = 0.5 * gam * (H ** 2) * K0 + q_sc_kpa * H * K0
@@ -854,7 +1346,6 @@ def calcular_empujes_muros_sict(altura_muro_m=6.0, gamma_relleno_kNm3=19.0,
 
     Ea_estatico_tot_tm = (Ea_relleno_kNm + Ea_sc_kNm) / 9.81
     Ea_sismico_tot_tm = (Ea_relleno_kNm + Ea_sc_kNm + dE_sismo_kNm) / 9.81
-    E0_reposo_tm = E0_reposo_kNm / 9.81
 
     M_volc_estatico_tmm = ((Ea_relleno_kNm * (H / 3.0)) + (Ea_sc_kNm * (H / 2.0))) / 9.81
     M_volc_sismico_tmm = M_volc_estatico_tmm + ((dE_sismo_kNm * (0.60 * H)) / 9.81)
@@ -876,28 +1367,18 @@ def calcular_empujes_muros_sict(altura_muro_m=6.0, gamma_relleno_kNm3=19.0,
         'dE_sismo_tm': round(dE_sismo_kNm / 9.81, 2),
         'Ea_total_estatico_tm': round(Ea_estatico_tot_tm, 2),
         'Ea_total_sismico_tm': round(Ea_sismico_tot_tm, 2),
-        'E0_reposo_tm': round(E0_reposo_tm, 2),
+        'E0_reposo_tm': round(E0_reposo_kNm / 9.81, 2),
         'M_volc_estatico_tmm': round(M_volc_estatico_tmm, 2),
-        'M_volc_sismico_tmm': round(M_volc_sismico_tmm, 2)
+        'M_volc_sismico_tmm': round(M_volc_sismico_tmm, 2),
+        'df_empujes_z': df_empujes_z
     }
 
 
-# ==============================================================================
-# 6. TERRAPLENES DE ACCESO Y TALUDES DE EXCAVACIÓN (TdR 1.5.7 y 1.4.13)
-# ==============================================================================
 def analizar_terraplen_y_excavacion_sict(df_tramos, naf_m,
                                          altura_terraplen_m=5.0, corona_terraplen_m=12.0,
                                          talud_terraplen_H_V=1.5, gamma_terraplen_kNm3=19.5,
                                          cv_consolidacion_m2_anio=2.5,
-                                         prof_excavacion_m=2.5, talud_exc_propuesto_H_V=1.0):
-    """
-    Revisa:
-      A. Terraplen de acceso: estabilidad por capacidad en la base, asentamientos
-         elasticos a corto plazo (etapa constructiva) y asentamientos por
-         consolidacion primaria a largo plazo (servicio), mas propuestas de mitigacion.
-      B. Excavaciones y taludes de corte: talud recomendable (H:V), factor de
-         seguridad de talud y diseno especial si H_exc > 4.00 m (TdR 1.5.7).
-    """
+                                         prof_excavacion_m=2.5, talud_exc_propuesto_H_V=0.58):
     H_t = max(0.5, float(altura_terraplen_m))
     B_cor = max(4.0, float(corona_terraplen_m))
     m_t = max(0.5, float(talud_terraplen_H_V))
@@ -921,10 +1402,7 @@ def analizar_terraplen_y_excavacion_sict(df_tramos, naf_m,
 
     FS_base_terr = q_ult_base / max(q_terr_kpa, 1.0)
 
-    asent_elastico_m = 0.0
-    asent_consolid_m = 0.0
-    espesor_cohesivo_acum = 0.0
-
+    asent_elastico_m, asent_consolid_m, espesor_cohesivo_acum = 0.0, 0.0, 0.0
     for _, t in df_tramos.iterrows():
         if t['Tipo'] == 'Roca':
             continue
@@ -935,12 +1413,9 @@ def analizar_terraplen_y_excavacion_sict(df_tramos, naf_m,
         delta_sigma_kpa = q_terr_kpa * Iz
 
         asent_elastico_m += (delta_sigma_kpa * dz) / max(t['Es_kPa'], 1000.0)
-
         if t['Tipo'] == 'Cohesivo':
             sigma_v0 = max(float(t['Sigma_v0_eff']), 10.0)
-            cc = float(t['Cc'])
-            e0 = float(t['e0'])
-            dh_c = (cc / (1.0 + e0)) * dz * math.log10((sigma_v0 + delta_sigma_kpa) / sigma_v0)
+            dh_c = (float(t['Cc']) / (1.0 + float(t['e0']))) * dz * math.log10((sigma_v0 + delta_sigma_kpa) / sigma_v0)
             asent_consolid_m += max(0.0, dh_c)
             espesor_cohesivo_acum += dz
 
@@ -948,15 +1423,10 @@ def analizar_terraplen_y_excavacion_sict(df_tramos, naf_m,
     sc_largo_cm = asent_consolid_m * 100.0
     s_total_terr_cm = se_corto_cm + sc_largo_cm
 
-    if espesor_cohesivo_acum > 0.1:
-        h_dr = espesor_cohesivo_acum / 2.0
-        t90_anios = (0.848 * (h_dr ** 2)) / max(float(cv_consolidacion_m2_anio), 0.1)
-        t90_meses = t90_anios * 12.0
-    else:
-        t90_meses = 0.0
+    t90_meses = ((0.848 * ((espesor_cohesivo_acum / 2.0) ** 2)) / max(float(cv_consolidacion_m2_anio), 0.1)) * 12.0 if espesor_cohesivo_acum > 0.1 else 0.0
 
     if s_total_terr_cm > 10.0:
-        mitigacion = "Instalar drenes verticales prefabricados + precarga temporal, mejoramiento basal con pedraplén y losa de transición reforzada."
+        mitigacion = "Instalar drenes verticales prefabricados + precarga temporal, pedraplén basal y losa de transición reforzada."
     elif s_total_terr_cm > 5.0:
         mitigacion = "Colocar capa de desplante de pedraplén / geotextil de refuerzo, construcción por etapas y losa de acceso articulada."
     else:
@@ -969,7 +1439,7 @@ def analizar_terraplen_y_excavacion_sict(df_tramos, naf_m,
 
     dz_e, c_e_ac, tp_e_ac, g_e_ac = 0.0, 0.0, 0.0, 0.0
     for _, t in df_tramos.iterrows():
-        ov_f = min(t['Prof_fin'], H_exc)
+        ov_f = min(t['Prof_fin'], max(H_exc, 3.0))
         dz = ov_f - t['Prof_ini']
         if dz <= 0:
             continue
@@ -983,23 +1453,25 @@ def analizar_terraplen_y_excavacion_sict(df_tramos, naf_m,
         phi_exc_rad = math.atan(tp_e_ac / dz_e)
         gam_exc = g_e_ac / dz_e
     else:
-        c_exc, phi_exc_rad, gam_exc = 20.0, math.radians(28.0), 18.0
+        c_exc, phi_exc_rad, gam_exc = 25.0, math.radians(28.0), 18.0
+
+    c_eq_kpa = max(c_exc, 15.0 + 12.0 * math.tan(phi_exc_rad))
+    No_est = float(np.interp(beta_exc_deg, [45.0, 60.0, 75.0, 90.0], [6.20, 5.25, 4.45, 3.85]))
+    H_crit_sin_ademe_m = max(1.50, min((No_est * c_eq_kpa * 0.70) / max(gam_exc, 14.0), 6.00))
 
     theta_crit = 0.5 * (beta_exc_rad + phi_exc_rad)
-    peso_cuna = 0.5 * gam_exc * (H_exc ** 2) * (max(0.05, (1.0 / math.tan(theta_crit)) - (1.0 / math.tan(beta_exc_rad))))
+    peso_cuna = 0.5 * gam_exc * (H_exc ** 2) * max(0.08, (1.0 / math.tan(theta_crit)) - (1.0 / math.tan(beta_exc_rad)))
     long_falla = H_exc / max(math.sin(theta_crit), 0.1)
-    f_res_talud = c_exc * long_falla + max(0.0, peso_cuna * math.cos(theta_crit)) * math.tan(phi_exc_rad)
-    f_act_talud = max(0.1, peso_cuna * math.sin(theta_crit))
-    FS_talud_exc = min(9.99, f_res_talud / f_act_talud)
+    f_res_talud = c_eq_kpa * long_falla + max(0.0, peso_cuna * math.cos(theta_crit)) * math.tan(phi_exc_rad)
+    FS_talud_exc = min(9.99, f_res_talud / max(0.1, peso_cuna * math.sin(theta_crit)))
 
-    requiere_diseno_especial_4m = (H_exc > 4.00)
-    if requiere_diseno_especial_4m:
-        rec_exc = (
-            f"Excavación profunda H = {H_exc:.2f} m (> 4.00 m TdR 1.5.7): Ejecutar corte escalonado con bermas intermedias "
-            f"cada 3.50 m o sistema de retención temporal (tablaestaca / concreto lanzado con anclas pasivas) y bombeo de achique."
-        )
+    requiere_diseno_especial_4m = (H_exc > 4.00) or (H_exc > H_crit_sin_ademe_m)
+    if H_exc > 4.00:
+        rec_exc = f"Excavación profunda H = {H_exc:.2f} m (> 4.00 m TdR 1.5.7): Ejecutar bermas cada 3.5 m o ademe/tablaestaca temporal."
+    elif H_exc > H_crit_sin_ademe_m:
+        rec_exc = f"H = {H_exc:.2f} m supera H_máx sin estabilización ({H_crit_sin_ademe_m:.2f} m): Abatir talud o colocar ademe ligero."
     else:
-        rec_exc = f"Excavación somera H = {H_exc:.2f} m: Talud temporal recomendado {max(m_exc, 0.75):.2f}:1 (H:V) libre de sobrecargas en el hombro."
+        rec_exc = f"CUMPLE sin estabilización especial (H = {H_exc:.2f} m <= H_máx = {H_crit_sin_ademe_m:.2f} m para talud {beta_exc_deg:.0f}°)."
 
     return {
         'aplica': True,
@@ -1015,33 +1487,28 @@ def analizar_terraplen_y_excavacion_sict(df_tramos, naf_m,
         'H_excavacion_m': round(H_exc, 2),
         'talud_exc_H_V': f"{m_exc:.2f} : 1",
         'angulo_talud_deg': round(beta_exc_deg, 1),
+        'H_max_sin_estab_m': round(H_crit_sin_ademe_m, 2),
         'FS_talud_exc': round(FS_talud_exc, 2),
-        'cumple_talud_exc': (FS_talud_exc >= 1.30),
+        'cumple_talud_exc': (FS_talud_exc >= 1.30) and (H_exc <= H_crit_sin_ademe_m),
         'requiere_diseno_especial_4m': requiere_diseno_especial_4m,
         'recomendacion_excavacion': rec_exc
     }
 
 
 # ==============================================================================
-# 7. ORQUESTADOR MODULAR INTEGRAL DE CUMPLIMIENTO TdR SICT
+# 7. ORQUESTADOR INTEGRAL DE 2 ETAPAS + MÓDULOS COMPLEMENTARIOS SICT / AASHTO
 # ==============================================================================
 def ejecutar_estudio_sict_modular(df_tramos, naf_m, config_modulos, params):
-    """
-    Ejecuta selectivamente los calculos habilitados en `config_modulos` y
-    encadena automaticamente los resultados entre si (por ejemplo, si
-    aplica_socavacion=False en un PFFCC, soc_total_m = 0.0 se propaga a
-    zapatas AASHTO y a Davisson-Robinson).
-    """
     resultados = {
         'tipo_cruce': params.get('tipo_cruce', 'PFFCC (Paso Superior de Ferrocarril)'),
+        'alcance_etapa': params.get('alcance_etapa', 'Completo (Etapa 1: Propuesta Inicial + Etapa 2: Revisión Estructural)'),
         'config_modulos': config_modulos,
         'naf_m': naf_m
     }
 
     if config_modulos.get('aplica_socavacion', False):
         res_soc = calcular_socavacion_sict(
-            df_tramos,
-            aplica_socavacion=True,
+            df_tramos, aplica_socavacion=True,
             gasto_diseno_m3s=params.get('Qd_m3s', 120.0),
             ancho_efectivo_m=params.get('Be_m', 25.0),
             tirante_medio_m=params.get('Hm_m', 2.5),
@@ -1052,15 +1519,11 @@ def ejecutar_estudio_sict_modular(df_tramos, naf_m, config_modulos, params):
             largo_pila_m=params.get('lp_soc_m', 3.6),
             angulo_esviaje_deg=params.get('esviaje_deg', 0.0),
             forma_pila=params.get('forma_pila', 'Circular / Redondeada'),
-            metodo_local=params.get('metodo_soc_local', 'Envolvente (Mayor)'),
-            dm_manual_mm=params.get('dm_manual_mm', None),
-            gamma_d_manual_tm3=params.get('gd_manual_tm3', None),
-            tipo_cauce_manual=params.get('tipo_cauce_manual', 'Auto')
+            metodo_local=params.get('metodo_soc_local', 'Envolvente (Mayor)')
         )
     else:
         res_soc = calcular_socavacion_sict(
-            df_tramos,
-            aplica_socavacion=False,
+            df_tramos, aplica_socavacion=False,
             motivo_no_aplica=f"No aplica socavación hidráulica por tratarse de: {params.get('tipo_cruce', 'Paso sin cauce fluvial')}."
         )
     resultados['socavacion'] = res_soc
@@ -1069,8 +1532,8 @@ def ejecutar_estudio_sict_modular(df_tramos, naf_m, config_modulos, params):
     if config_modulos.get('aplica_exploracion', True):
         resultados['exploracion'] = revisar_criterios_exploracion_sict(
             df_tramos,
-            prof_desplante_m=params.get('Df_zap_m', 2.0),
-            ancho_zapata_m=params.get('B_zap_m', 3.0),
+            prof_desplante_m=params.get('Df_ref_exp_m', 2.5),
+            ancho_zapata_m=params.get('B_ref_exp_m', 3.0),
             en_ladera=params.get('en_ladera', False),
             distancia_horiz_talud_m=params.get('dist_talud_m', 8.0),
             corte_subrasante_m=params.get('corte_subrasante_m', 0.0)
@@ -1078,41 +1541,42 @@ def ejecutar_estudio_sict_modular(df_tramos, naf_m, config_modulos, params):
     else:
         resultados['exploracion'] = {'aplica': False}
 
-    if config_modulos.get('aplica_superficial_aashto', True):
-        resultados['superficial_aashto'] = revisar_zapata_aashto_sict(
-            df_tramos, naf_m,
-            B_m=params.get('B_zap_m', 3.0),
-            L_m=params.get('L_zap_m', 8.0),
-            Df_m=params.get('Df_zap_m', 2.0),
-            V_ton=params.get('V_zap_ton', 180.0),
-            H_B_ton=params.get('HB_zap_ton', 18.0),
-            H_L_ton=params.get('HL_zap_ton', 5.0),
-            M_B_tonm=params.get('MB_zap_tonm', 45.0),
-            M_L_tonm=params.get('ML_zap_tonm', 15.0),
-            socavacion_total_m=soc_tot_m,
-            es_sismo=params.get('es_sismo_zap', False),
-            FS_capacidad=params.get('FS_cap_zap', 3.0)
+    if config_modulos.get('aplica_propuesta_inicial', True):
+        d_pilas_prop = params.get('diametros_prop', [0.80, 1.00, 1.20, 1.50])
+        l_pilas_prop = params.get('longitudes_prop', [12.0, 15.0, 18.0, 21.0, 24.0])
+        b_zap_prop = params.get('anchos_zap_prop', [2.0, 2.5, 3.0, 3.5])
+        df_zap_prop = params.get('df_zap_prop', [1.5, 2.0, 2.5, 3.0])
+        prop_ini = generar_propuesta_inicial_sict(
+            df_tramos, naf_m, d_pilas_prop, l_pilas_prop, b_zap_prop, df_zap_prop, socavacion_total_m=soc_tot_m
         )
+        prop_ini['aplica'] = True
+        resultados['propuesta_inicial'] = prop_ini
     else:
-        resultados['superficial_aashto'] = {'aplica': False}
+        resultados['propuesta_inicial'] = {'aplica': False}
 
-    if config_modulos.get('aplica_pandeo_davisson', True):
-        resultados['davisson_pandeo'] = analizar_davisson_robinson_sict(
-            df_tramos, naf_m,
-            D_m=params.get('D_pila_m', 1.20),
-            L_enterrada_m=params.get('L_pila_m', 18.0),
-            P_axial_act_ton=params.get('P_act_pila_ton', 220.0),
-            altura_libre_col_m=params.get('H_libre_col_m', 0.0),
-            socavacion_total_m=soc_tot_m,
-            fc_kgcm2=params.get('fc_pila_kgcm2', 250.0),
-            condicion_cabeza=params.get('condicion_cabeza_pila', 'Articulada - Traslación Impedida (K = 0.80)')
-        )
+    df_apoyos_in = params.get('df_apoyos_estructurales', None)
+    if config_modulos.get('aplica_revision_definitiva', True) and df_apoyos_in is not None and not df_apoyos_in.empty:
+        lista_res_ap = []
+        for _, fila_ap in df_apoyos_in.iterrows():
+            lista_res_ap.append(revisar_apoyo_definitivo_sict(df_tramos, naf_m, fila_ap, socavacion_total_m=soc_tot_m))
+        df_res_apoyos = pd.DataFrame([{k: v for k, v in d.items() if not k.startswith('detalle_')} for d in lista_res_ap])
+        resultados['revision_definitiva'] = {
+            'aplica': True,
+            'lista_apoyos': lista_res_ap,
+            'df_resumen_apoyos': df_res_apoyos
+        }
+        ap_pilas = [a for a in lista_res_ap if 'detalle_davisson' in a]
+        ap_zaps = [a for a in lista_res_ap if 'detalle_zapata' in a]
+        resultados['davisson_pandeo'] = ap_pilas[0]['detalle_davisson'] if ap_pilas else {'aplica': False}
+        resultados['superficial_aashto'] = ap_zaps[0]['detalle_zapata'] if ap_zaps else {'aplica': False}
     else:
+        resultados['revision_definitiva'] = {'aplica': False}
         resultados['davisson_pandeo'] = {'aplica': False}
+        resultados['superficial_aashto'] = {'aplica': False}
 
     if config_modulos.get('aplica_empujes_muros', True):
         resultados['empujes_muros'] = calcular_empujes_muros_sict(
-            altura_muro_m=params.get('H_muro_m', 6.0),
+            altura_muro_m=params.get('H_muro_m', 6.5),
             gamma_relleno_kNm3=params.get('gamma_relleno_kNm3', 19.0),
             phi_relleno_deg=params.get('phi_relleno_deg', 32.0),
             c_relleno_kpa=params.get('c_relleno_kpa', 0.0),
@@ -1132,8 +1596,8 @@ def ejecutar_estudio_sict_modular(df_tramos, naf_m, config_modulos, params):
             talud_terraplen_H_V=params.get('talud_terr_HV', 1.5),
             gamma_terraplen_kNm3=params.get('gamma_terr_kNm3', 19.5),
             cv_consolidacion_m2_anio=params.get('cv_m2_anio', 2.5),
-            prof_excavacion_m=params.get('H_exc_m', params.get('Df_zap_m', 2.0)),
-            talud_exc_propuesto_H_V=params.get('talud_exc_HV', 0.75)
+            prof_excavacion_m=params.get('H_exc_m', 2.5),
+            talud_exc_propuesto_H_V=params.get('talud_exc_HV', 0.58)
         )
     else:
         resultados['terraplen_excavacion'] = {'aplica': False}
