@@ -24,7 +24,7 @@ from cimentaciones_superficiales import (
     generar_analisis_parametrico_zapatas
 )
 from generador_memoria_zapatas import generar_memoria_zapatas_pdf, cargar_imagen_logo
-from calculos_sict_puentes import procesar_sondeo_sict, ejecutar_estudio_sict_modular
+from calculos_sict_puentes import procesar_sondeo_sict, extraer_config_sict_desde_proyecto, ejecutar_estudio_sict_modular
 from generador_memoria_sict import generar_memoria_sict_pdf
 
 # ==========================================
@@ -95,17 +95,23 @@ def generar_plantilla_excel():
                           'Zap_Df_Min_m', 'Zap_Df_Max_m', 'Zap_Df_Paso_m',
                           'Zap_Corrida_B_Min_m', 'Zap_Corrida_B_Max_m', 'Zap_Corrida_B_Paso_m',
                           'Zap_Aislada_B_Min_m', 'Zap_Aislada_B_Max_m', 'Zap_Aislada_B_Paso_m',
-                          'Zap_Colindante', 'Zap_Se_Max_Corrida_cm', 'Zap_Se_Max_Aislada_cm', 'Zap_Margen_Deformacion_pct'],
-            'Valor': ['ESTUDIO DE MECÁNICA DE SUELOS', 'SISTEMA DE TRANSPORTE POR CABLE', 'PERFIL ESTRATIGRÁFICO TORRE 11', 
-                      'OCTUBRE 2026', 'logo_empresa.png', 
-                      'N 3,539,426   E 514,589   WGS84', '48.7 m (rel. MSL)', '16.7 m (rel. MSL)', '48.7 m (rel. MSL)', '5.8', '2026-10-08',
+                          'Zap_Colindante', 'Zap_Se_Max_Corrida_cm', 'Zap_Se_Max_Aislada_cm', 'Zap_Margen_Deformacion_pct',
+                          'SICT_Contrato', 'SICT_Tipo_Obra', 'SICT_Camino', 'SICT_Tramo', 'SICT_Localizacion',
+                          'SICT_Aplica_Socavacion', 'SICT_Responsable_Tecnico', 'SICT_Cedula_Prof',
+                          'SICT_H_Muro_m', 'SICT_kh_Sismo', 'SICT_H_Terraplen_m'],
+            'Valor': ['ESTUDIO DE MECÁNICA DE SUELOS', 'SISTEMA DE TRANSPORTE POR CABLE', 'PERFIL ESTRATIGRÁFICO SONDEO 1', 
+                      'NOVIEMBRE 2026', 'logo_empresa.png', 
+                      'N 2 106 106   E 586 885   WGS84', '2170.53', '2140.53', '2170.53', '5.8', '2026-11-25',
                       '60', '100', 'CON_LINER', '18.0',
-                      '1.0', '2.0', '0.2',
-                      '15.0', '25.0', '1.0',
-                      '1.2', '2.0', '0.2',
+                      '0.8', '1.6', '0.2',
+                      '14.0', '26.0', '2.0',
+                      '1.8', '2.8', '0.2',
                       '0.6', '1.2', '0.2',
-                      '1.2', '2.4', '0.3',
-                      'NO', '2.5', '5.0', '80.0']
+                      '1.8', '3.0', '0.2',
+                      'NO', '2.5', '5.0', '80.0',
+                      'SICT-2026-S/N', 'PFFCC (Paso Superior de Ferrocarril — Sin Cauce)', 'Vía Férrea / Vialidad', 'Km 0+000.00', 'Puebla, Pue.',
+                      'NO', 'ING. ESPECIALISTA EN GEOTECNIA', 'S/D',
+                      '7.0', '0.12', '6.5']
         })
         df_proy.to_excel(writer, sheet_name='Proyecto', index=False)
         
@@ -905,74 +911,91 @@ with tab_zapatas:
 
 
 # ==========================================
-# 5. PESTAÑA 4: PUENTES Y PASOS SICT / AASHTO (FLUJO EN 2 ETAPAS — TdR ETAPA V Y VI)
+# 5. PESTAÑA 4: PUENTES Y PASOS SICT / AASHTO (PRE-ESTRUCTURAL + MINUTA IV + ETAPA 2)
 # ==========================================
 with tab_sict:
     st.header("Estudio Geotécnico y de Cimentación para Puentes y Pasos — TdR SICT / AASHTO")
     st.caption(
-        "Flujo secuencial en 2 Etapas conforme a la práctica SICT / AASHTO: "
-        "**Etapa 1 (Propuesta Inicial de Alternativas — Minuta IV)** y **Etapa 2 (Revisión Definitiva Multi-Apoyo con Descargas Estructurales)**, "
-        "con interruptores independientes para cada cálculo."
+        "Lee automáticamente tu plantilla unificada `Datos_Sondeo.xlsx` (la misma del Perfil Estratigráfico). "
+        "Conserva la **Etapa 1 Pre-Estructural + Minuta IV (TdR 1.5.9)** con desglose de **Consideraciones Geotécnicas** y permite habilitar la **Etapa 2 (Revisión Multi-Apoyo)** cuando ya existan cargas estructurales."
     )
 
-    col_tipo_cr, col_alcance_cr = st.columns([1.15, 1.35])
-    with col_tipo_cr:
-        tipo_cruce_sict = st.selectbox(
-            "Tipo de Estructura / Sitio de Cruce:",
-            options=[
-                "PFFCC (Paso Superior de Ferrocarril — Sin Cauce)",
-                "PSV / PIV (Paso Vehicular — Sin Cauce)",
-                "Puente sobre Cauce Fluvial / Río",
-                "Viaducto / Puente sobre Barranca Seca"
-            ],
-            index=0,
-            key="sict_tipo_cruce"
-        )
-    with col_alcance_cr:
-        alcance_etapa_ui = st.radio(
-            "Alcance de Entrega Actual:",
-            options=[
-                "Solo Etapa 1: Propuesta Inicial de Alternativas (Pre-Estructural / Minuta IV)",
-                "Estudio Completo: Etapa 1 (Propuesta Inicial) + Etapa 2 (Revisión Definitiva Multi-Apoyo)"
-            ],
-            index=1,
-            key="sict_alcance_radio"
-        )
-
-    es_fluvial_default = ("Fluvial" in tipo_cruce_sict)
-    incluir_etapa2_default = ("Estudio Completo" in alcance_etapa_ui)
-
-    if es_fluvial_default:
-        st.info("**Cruce Fluvial activo:** El módulo de Socavación General y Local (TdR 1.5.6.1) se habilita por defecto y descuenta automáticamente el espesor erosionado en las Etapas 1 y 2.")
-    else:
-        st.info(f"**{tipo_cruce_sict.split('(')[0].strip()}:** Al no cruzar un cauce fluvial, la socavación hidráulica permanece **deshabilitada (`0.00 m`)** y se documenta técnicamente en la memoria.")
-
-    archivo_sict = st.file_uploader("Carga el archivo Datos_Sondeo.xlsx para evaluación SICT / AASHTO", type=["xlsx"], key="uploader_sict")
+    archivo_sict = st.file_uploader("Carga tu archivo Datos_Sondeo.xlsx (unificado SPT / PCA)", type=["xlsx"], key="uploader_sict")
 
     if archivo_sict is not None:
         try:
             df_tramos_s, naf_s, proy_dict_s, pruebas_det_s = procesar_sondeo_sict(archivo_sict)
-            st.success(f"Sondeo procesado correctamente: {len(df_tramos_s)} estratos válidos | NAF: {naf_s if naf_s is not None else 'No detectado'} m")
+            cfg_s = extraer_config_sict_desde_proyecto(proy_dict_s)
+            st.success(
+                f"Plantilla procesada: **{cfg_s['Sondeo']}** ({len(df_tramos_s)} estratos válidos | "
+                f"Elev. Sup.: {cfg_s['Elevacion_Sup']:.2f} m | NAF: {naf_s if naf_s is not None else 'No detectado'} m)"
+            )
 
-            with st.expander("Ver / Ajustar Parámetros Geotécnicos por Estrato (Resistencia, Rigidez, Granulometría y Consolidación)", expanded=False):
-                cols_edit_s = ['Prof_ini', 'Prof_fin', 'SUCS', 'Tipo', 'Gamma', 'c_kPa', 'phi_deg', 'Es_kPa', 'dm_mm', 'Cc', 'e0']
+            opciones_cruce = [
+                "PFFCC (Paso Superior de Ferrocarril — Sin Cauce)",
+                "PSV / PIV (Paso Vehicular — Sin Cauce)",
+                "Puente sobre Cauce Fluvial / Río",
+                "Viaducto / Puente sobre Barranca Seca"
+            ]
+            idx_cruce_def = 2 if cfg_s['SICT_Aplica_Socavacion'] else 0
+            for idx_op, op_txt in enumerate(opciones_cruce):
+                if cfg_s['SICT_Tipo_Obra'][:12].upper() in op_txt.upper():
+                    idx_cruce_def = idx_op
+                    break
+
+            col_tipo_cr, col_alcance_cr = st.columns([1.15, 1.35])
+            with col_tipo_cr:
+                tipo_cruce_sict = st.selectbox(
+                    "Tipo de Estructura / Sitio de Cruce (leído de Excel):",
+                    options=opciones_cruce,
+                    index=idx_cruce_def,
+                    key="sict_tipo_cruce"
+                )
+            with col_alcance_cr:
+                alcance_etapa_ui = st.radio(
+                    "Alcance de Entrega:",
+                    options=[
+                        "Etapa 1: Pre-Estructural + Propuesta Minuta IV (TdR 1.5.9)",
+                        "Estudio Completo: Etapa 1 + Minuta IV + Etapa 2 (Revisión Multi-Apoyo)"
+                    ],
+                    index=0,
+                    key="sict_alcance_radio"
+                )
+
+            es_fluvial_default = ("Fluvial" in tipo_cruce_sict) or cfg_s['SICT_Aplica_Socavacion']
+            incluir_etapa2_default = ("Estudio Completo" in alcance_etapa_ui)
+
+            # --- DESGLOSE DE CONSIDERACIONES GEOTÉCNICAS EN PANTALLA ---
+            with st.expander("📋 Desglose de Consideraciones Geotécnicas y Deducción de Parámetros (Editable)", expanded=True):
+                st.caption("Factores de corrección SPT (CE, CR, CB, CS, CN), estado de compacidad/consistencia, origen de parámetros (SPT vs. Laboratorio PCA) y propiedades mecánicas.")
+                cols_edit_s = ['Prof_ini', 'Prof_fin', 'SUCS', 'Tipo', 'N_campo', 'N60', 'CN', 'N1_60', 'Estado_Comp', 'Gamma', 'c_kPa', 'phi_deg', 'Es_kPa', 'Origen_Param']
                 df_tramos_s_edit = st.data_editor(
                     df_tramos_s[cols_edit_s],
+                    column_config={
+                        "Prof_ini": st.column_config.NumberColumn("Ini (m)", format="%.2f", disabled=True),
+                        "Prof_fin": st.column_config.NumberColumn("Fin (m)", format="%.2f", disabled=True),
+                        "N_campo": st.column_config.NumberColumn("N_camp", format="%.0f", disabled=True),
+                        "N60": st.column_config.NumberColumn("N60", format="%.1f", disabled=True),
+                        "CN": st.column_config.NumberColumn("CN", format="%.2f", disabled=True),
+                        "N1_60": st.column_config.NumberColumn("(N1)60", format="%.1f", disabled=True),
+                        "Estado_Comp": st.column_config.TextColumn("Estado / Compacidad", disabled=True),
+                        "Origen_Param": st.column_config.TextColumn("Origen", disabled=True),
+                    },
                     width="stretch",
                     hide_index=True,
                     key="editor_tramos_sict"
                 )
                 df_sict_calc = df_tramos_s.copy()
-                for c_ed in ['SUCS', 'Tipo', 'Gamma', 'c_kPa', 'phi_deg', 'Es_kPa', 'dm_mm', 'Cc', 'e0']:
+                for c_ed in ['SUCS', 'Tipo', 'Gamma', 'c_kPa', 'phi_deg', 'Es_kPa']:
                     df_sict_calc[c_ed] = df_tramos_s_edit[c_ed]
 
-            st.markdown("#### 1. Interruptores Modulares de Cálculo (Habilita solo los que apliquen a tu proyecto)")
+            st.markdown("#### 1. Interruptores Modulares de Cálculo")
             cm_a, cm_b, cm_c = st.columns(3)
             with cm_a:
                 chk_s_exp = st.checkbox("1. Exploración y Suspensión (TdR 1.5.2)", value=True, key="chk_s_exp")
                 chk_s_soc = st.checkbox("2. Socavación General y Local (TdR 1.5.6)", value=es_fluvial_default, key="chk_s_soc")
             with cm_b:
-                chk_s_prop = st.checkbox("3. Etapa 1: Propuesta Inicial (Pilas / Zapatas)", value=True, key="chk_s_prop")
+                chk_s_prop = st.checkbox("3. Etapa 1: Propuesta Pre-Estructural + Minuta IV", value=True, key="chk_s_prop")
                 chk_s_rev = st.checkbox("4. Etapa 2: Revisión Definitiva Multi-Apoyo", value=incluir_etapa2_default, key="chk_s_rev")
             with cm_c:
                 chk_s_emp = st.checkbox("5. Empujes Metro a Metro en Muros (SICT)", value=True, key="chk_s_emp")
@@ -983,59 +1006,55 @@ with tab_sict:
                 'alcance_etapa': alcance_etapa_ui
             }
 
-            st.markdown("#### 2. Configuración de Parámetros por Etapa")
+            st.markdown("#### 2. Parámetros Prellenados desde tu Plantilla Excel")
 
-            # --- MÓDULO EXPLORACIÓN ---
             if chk_s_exp:
                 with st.expander("🔍 Criterios de Exploración, Cortes y Retiro en Laderas (TdR 1.5.2)", expanded=False):
                     ce1, ce2, ce3, ce4 = st.columns(4)
                     with ce1:
-                        params_sict['Df_ref_exp_m'] = st.number_input("Desplante de referencia (m)", value=2.20, min_value=0.50, step=0.20, key="s_df_ref")
+                        params_sict['Df_ref_exp_m'] = st.number_input("Desplante ref. (m)", value=float(cfg_s['df_ref_m']), min_value=0.50, step=0.20, key="s_df_ref")
                     with ce2:
-                        params_sict['B_ref_exp_m'] = st.number_input("Ancho B ref. zapata/cabezal (m)", value=3.20, min_value=0.60, step=0.20, key="s_b_ref")
+                        params_sict['B_ref_exp_m'] = st.number_input("Ancho B ref. (m)", value=float(cfg_s['b_ref_m']), min_value=0.60, step=0.20, key="s_b_ref")
                     with ce3:
-                        params_sict['corte_subrasante_m'] = st.number_input("Corte previsto subrasante (m)", value=0.0, min_value=0.0, step=0.50, key="s_corte_sub")
+                        params_sict['corte_subrasante_m'] = st.number_input("Corte subrasante (m)", value=0.0, min_value=0.0, step=0.50, key="s_corte_sub")
                     with ce4:
                         params_sict['en_ladera'] = st.checkbox("¿Próximo a talud / barranca?", value=False, key="s_en_lad")
-                        params_sict['dist_talud_m'] = st.number_input("Retiro horiz. al talud (m) [>=2B]", value=8.0, min_value=0.0, step=0.50, disabled=not params_sict['en_ladera'], key="s_dist_tal")
+                        params_sict['dist_talud_m'] = st.number_input("Retiro horiz. al talud (m)", value=8.0, min_value=0.0, step=0.50, disabled=not params_sict['en_ladera'], key="s_dist_tal")
 
-            # --- MÓDULO SOCAVACIÓN ---
             if chk_s_soc:
                 with st.expander("🌊 Parámetros Hidráulicos de Socavación General y Local (TdR 1.5.6.1)", expanded=True):
                     cs1, cs2, cs3, cs4 = st.columns(4)
                     with cs1:
-                        params_sict['Qd_m3s'] = st.number_input("Gasto de diseño Qd (m³/s)", value=120.0, min_value=1.0, step=10.0, key="s_qd")
-                        params_sict['Be_m'] = st.number_input("Ancho efectivo cauce Be (m)", value=25.0, min_value=1.0, step=1.0, key="s_be")
+                        params_sict['Qd_m3s'] = st.number_input("Gasto diseño Qd (m³/s)", value=120.0, min_value=1.0, step=10.0, key="s_qd")
+                        params_sict['Be_m'] = st.number_input("Ancho efectivo Be (m)", value=25.0, min_value=1.0, step=1.0, key="s_be")
                     with cs2:
                         params_sict['Hm_m'] = st.number_input("Tirante medio Hm (m)", value=2.50, min_value=0.20, step=0.20, key="s_hm")
                         params_sict['Ho_m'] = st.number_input("Tirante local Ho (m)", value=2.80, min_value=0.20, step=0.20, key="s_ho")
                     with cs3:
-                        params_sict['V0_ms'] = st.number_input("Velocidad media V0 (m/s)", value=2.40, min_value=0.10, step=0.20, key="s_v0")
-                        params_sict['Tr_anios'] = st.selectbox("Periodo de retorno Tr (años)", options=[50, 100, 200, 500, 1000], index=1, key="s_tr")
+                        params_sict['V0_ms'] = st.number_input("Velocidad V0 (m/s)", value=2.40, min_value=0.10, step=0.20, key="s_v0")
+                        params_sict['Tr_anios'] = st.selectbox("Periodo retorno Tr (años)", options=[50, 100, 200, 500, 1000], index=1, key="s_tr")
                     with cs4:
-                        params_sict['bp_soc_m'] = st.number_input("Ancho expuesto pila b (m)", value=1.20, min_value=0.30, step=0.10, key="s_bp")
-                        params_sict['lp_soc_m'] = st.number_input("Largo de pila l (m)", value=3.60, min_value=0.30, step=0.20, key="s_lp")
+                        params_sict['bp_soc_m'] = st.number_input("Ancho pila b (m)", value=1.20, min_value=0.30, step=0.10, key="s_bp")
+                        params_sict['lp_soc_m'] = st.number_input("Largo pila l (m)", value=3.60, min_value=0.30, step=0.20, key="s_lp")
                     cs5, cs6, cs7 = st.columns(3)
                     with cs5:
-                        params_sict['esviaje_deg'] = st.number_input("Ángulo de esviaje (°)", value=0.0, min_value=0.0, max_value=80.0, step=5.0, key="s_esv")
+                        params_sict['esviaje_deg'] = st.number_input("Ángulo esviaje (°)", value=0.0, min_value=0.0, max_value=80.0, step=5.0, key="s_esv")
                     with cs6:
                         params_sict['forma_pila'] = st.selectbox("Nariz de pila", options=["Circular / Redondeada", "Rectangular", "Lenticular / Aguda"], key="s_fpila")
                     with cs7:
-                        params_sict['metodo_soc_local'] = st.selectbox("Método Socavación Local", options=["Envolvente (Mayor)", "Laursen", "Yaroslavtziev"], key="s_msoc")
+                        params_sict['metodo_soc_local'] = st.selectbox("Método Local", options=["Envolvente (Mayor)", "Laursen", "Yaroslavtziev"], key="s_msoc")
 
-            # --- ETAPA 1: PROPUESTA INICIAL DE ALTERNATIVAS ---
             if chk_s_prop:
-                with st.expander("📊 ETAPA 1: Rango de Propuesta Inicial para Selección Estructural (Pilas AASHTO LRFD y Zapatas)", expanded=True):
-                    st.caption("Genera los catálogos paramétricos de capacidad a compresión, extracción y rigidez para que el área estructural dimensione la subestructura.")
+                with st.expander("📊 ETAPA 1: Propuesta Inicial Pre-Estructural (Prellenada desde Hoja 'Proyecto')", expanded=True):
                     cp1, cp2 = st.columns(2)
                     with cp1:
-                        st.markdown("**Catálogo de Pilas Individuales (AASHTO LRFD: O'Neill & Reese)**")
-                        d_prop_str = st.text_input("Diámetros de pila D a proponer (m, separados por coma)", value="0.80, 1.00, 1.10, 1.20, 1.50", key="s_dprop")
-                        l_prop_str = st.text_input("Longitudes de pila L a proponer (m, separadas por coma)", value="14.0, 18.0, 22.0, 25.0", key="s_lprop")
+                        st.markdown("**Pilas Individuales (AASHTO LRFD: O'Neill & Reese)**")
+                        d_prop_str = st.text_input("Diámetros D (m, separados por coma)", value=cfg_s['diametros_prop_str'], key="s_dprop")
+                        l_prop_str = st.text_input("Longitudes L (m, separadas por coma)", value=cfg_s['longitudes_prop_str'], key="s_lprop")
                     with cp2:
-                        st.markdown("**Catálogo Preliminar de Zapatas Superficiales (Df <= 4.0 m)**")
-                        b_zap_str = st.text_input("Anchos de zapata B a proponer (m, separados por coma)", value="2.00, 2.50, 3.00, 3.50", key="s_bzprop")
-                        df_zap_str = st.text_input("Profundidades de desplante Df (m, separadas por coma)", value="1.50, 2.00, 2.50, 3.00", key="s_dfzprop")
+                        st.markdown("**Zapatas Preliminares (Df <= 4.0 m)**")
+                        b_zap_str = st.text_input("Anchos B (m, separados por coma)", value=cfg_s['anchos_zap_prop_str'], key="s_bzprop")
+                        df_zap_str = st.text_input("Desplantes Df (m, separados por coma)", value=cfg_s['df_zap_prop_str'], key="s_dfzprop")
 
                     try:
                         params_sict['diametros_prop'] = [round(float(x.strip()), 2) for x in d_prop_str.split(',') if x.strip()]
@@ -1045,155 +1064,88 @@ with tab_sict:
                     except Exception:
                         params_sict['diametros_prop'] = [0.80, 1.00, 1.20, 1.50]
                         params_sict['longitudes_prop'] = [14.0, 18.0, 22.0, 25.0]
-                        params_sict['anchos_zap_prop'] = [2.00, 2.50, 3.00, 3.50]
-                        params_sict['df_zap_prop'] = [1.50, 2.00, 2.50, 3.00]
+                        params_sict['anchos_zap_prop'] = [1.80, 2.20, 2.60, 3.00]
+                        params_sict['df_zap_prop'] = [1.80, 2.00, 2.20, 2.40]
 
-            # --- ETAPA 2: REVISIÓN DEFINITIVA MULTI-APOYO CON DESCARGAS ESTRUCTURALES ---
             if chk_s_rev:
-                with st.expander("🏗️ ETAPA 2: Revisión Definitiva por Apoyo con Descargas Estructurales (Grupos de Pilas / Zapatas)", expanded=True):
-                    st.caption(
-                        "Agrega, edita o elimina filas para revisar todos los apoyos del puente/PFFCC (Caballetes, Pilas intermedias o Ejes críticos en tensión). "
-                        "Evalúa automáticamente eficiencia de grupo AASHTO 10.7.3.9, tracción en pila esquina, asentamientos Poulos (<=25 mm), Broms lateral y pandeo Davisson-Robinson."
-                    )
+                with st.expander("🏗️ ETAPA 2: Revisión Definitiva Multi-Apoyo con Descargas Estructurales", expanded=True):
+                    elev_base_def = float(cfg_s['Elevacion_Sup'])
                     if 'df_apoyos_sict_default' not in st.session_state:
                         st.session_state['df_apoyos_sict_default'] = pd.DataFrame([
                             {
-                                'Apoyo': 'Caballete 1',
-                                'Tipo_Cimentacion': 'Grupo de Pilas',
-                                'Elev_NTN_msnm': 2165.50,
-                                'Df_Cabezal_Zapata_m': 2.00,
-                                'Pilas_nx': 3,
-                                'Pilas_ny': 1,
-                                'D_Pila_m': 1.20,
-                                'L_Pila_m': 16.0,
-                                'Sep_entre_D': 3.0,
-                                'B_Zapata_m': 3.0,
-                                'L_Zapata_m': 9.0,
-                                'V_Comp_ton': 630.0,
-                                'T_Tens_ton': 0.0,
-                                'Hx_ton': 45.0,
-                                'Hy_ton': 15.0,
-                                'Mx_tonm': 30.0,
-                                'My_tonm': 120.0
+                                'Apoyo': 'Caballete 1', 'Tipo_Cimentacion': 'Grupo de Pilas',
+                                'Elev_NTN_msnm': elev_base_def, 'Df_Cabezal_Zapata_m': 2.00,
+                                'Pilas_nx': 3, 'Pilas_ny': 1, 'D_Pila_m': 1.20, 'L_Pila_m': 16.0, 'Sep_entre_D': 3.0,
+                                'B_Zapata_m': 3.0, 'L_Zapata_m': 9.0,
+                                'V_Comp_ton': 630.0, 'T_Tens_ton': 0.0, 'Hx_ton': 45.0, 'Hy_ton': 15.0, 'Mx_tonm': 30.0, 'My_tonm': 120.0
                             },
                             {
-                                'Apoyo': 'Eje 9 Crítico',
-                                'Tipo_Cimentacion': 'Grupo de Pilas',
-                                'Elev_NTN_msnm': 2165.20,
-                                'Df_Cabezal_Zapata_m': 1.50,
-                                'Pilas_nx': 2,
-                                'Pilas_ny': 2,
-                                'D_Pila_m': 1.10,
-                                'L_Pila_m': 23.0,
-                                'Sep_entre_D': 3.0,
-                                'B_Zapata_m': 5.1,
-                                'L_Zapata_m': 5.1,
-                                'V_Comp_ton': 420.0,
-                                'T_Tens_ton': 575.0,
-                                'Hx_ton': 267.5,
-                                'Hy_ton': 136.3,
-                                'Mx_tonm': 0.0,
-                                'My_tonm': 0.0
-                            },
-                            {
-                                'Apoyo': 'Apoyo Zapata',
-                                'Tipo_Cimentacion': 'Zapata Aislada',
-                                'Elev_NTN_msnm': 2166.00,
-                                'Df_Cabezal_Zapata_m': 2.20,
-                                'Pilas_nx': 1,
-                                'Pilas_ny': 1,
-                                'D_Pila_m': 1.00,
-                                'L_Pila_m': 12.0,
-                                'Sep_entre_D': 3.0,
-                                'B_Zapata_m': 3.5,
-                                'L_Zapata_m': 8.5,
-                                'V_Comp_ton': 210.0,
-                                'T_Tens_ton': 0.0,
-                                'Hx_ton': 22.0,
-                                'Hy_ton': 5.0,
-                                'Mx_tonm': 12.0,
-                                'My_tonm': 55.0
+                                'Apoyo': 'Eje 9 Crítico', 'Tipo_Cimentacion': 'Grupo de Pilas',
+                                'Elev_NTN_msnm': elev_base_def, 'Df_Cabezal_Zapata_m': 1.50,
+                                'Pilas_nx': 2, 'Pilas_ny': 2, 'D_Pila_m': 1.10, 'L_Pila_m': 23.0, 'Sep_entre_D': 3.0,
+                                'B_Zapata_m': 5.1, 'L_Zapata_m': 5.1,
+                                'V_Comp_ton': 420.0, 'T_Tens_ton': 575.0, 'Hx_ton': 267.5, 'Hy_ton': 136.3, 'Mx_tonm': 0.0, 'My_tonm': 0.0
                             }
                         ])
-
                     df_apoyos_edit = st.data_editor(
                         st.session_state['df_apoyos_sict_default'],
                         num_rows="dynamic",
                         column_config={
-                            "Apoyo": st.column_config.TextColumn("Apoyo / Eje"),
                             "Tipo_Cimentacion": st.column_config.SelectboxColumn("Sistema Elegido", options=["Grupo de Pilas", "Zapata Aislada"]),
-                            "Elev_NTN_msnm": st.column_config.NumberColumn("Elev. NTN (msnm)", format="%.2f"),
-                            "Df_Cabezal_Zapata_m": st.column_config.NumberColumn("Df Cabezal/Zap (m)", min_value=0.5, step=0.2, format="%.2f"),
-                            "Pilas_nx": st.column_config.NumberColumn("Filas nx", min_value=1, max_value=10, step=1),
-                            "Pilas_ny": st.column_config.NumberColumn("Cols ny", min_value=1, max_value=10, step=1),
-                            "D_Pila_m": st.column_config.NumberColumn("D Pila (m)", min_value=0.50, max_value=3.00, step=0.10, format="%.2f"),
-                            "L_Pila_m": st.column_config.NumberColumn("L Pila (m)", min_value=4.0, max_value=50.0, step=1.0, format="%.1f"),
-                            "Sep_entre_D": st.column_config.NumberColumn("Sep / D", min_value=2.5, max_value=6.0, step=0.5, format="%.1f"),
-                            "B_Zapata_m": st.column_config.NumberColumn("B Zap (m)", min_value=0.8, step=0.2, format="%.2f"),
-                            "L_Zapata_m": st.column_config.NumberColumn("L Zap (m)", min_value=0.8, step=0.5, format="%.2f"),
-                            "V_Comp_ton": st.column_config.NumberColumn("V Comp (t)", min_value=0.0, step=10.0, format="%.1f"),
-                            "T_Tens_ton": st.column_config.NumberColumn("T Tens (t)", min_value=0.0, step=10.0, format="%.1f"),
-                            "Hx_ton": st.column_config.NumberColumn("Hx (t)", step=5.0, format="%.1f"),
-                            "Hy_ton": st.column_config.NumberColumn("Hy (t)", step=5.0, format="%.1f"),
-                            "Mx_tonm": st.column_config.NumberColumn("Mx (t·m)", step=10.0, format="%.1f"),
-                            "My_tonm": st.column_config.NumberColumn("My (t·m)", step=10.0, format="%.1f"),
                         },
                         width="stretch",
                         key="editor_apoyos_sict"
                     )
                     params_sict['df_apoyos_estructurales'] = df_apoyos_edit
 
-            # --- ETAPA 3A: EMPUJES METRO A METRO EN MUROS / ESTRIBOS ---
             if chk_s_emp:
                 with st.expander("🧱 Empuje de Diseño Metro a Metro en Estribos y Muros (Rankine + Mononobe-Okabe)", expanded=False):
                     cm1, cm2, cm3 = st.columns(3)
                     with cm1:
-                        params_sict['H_muro_m'] = st.number_input("Altura máxima de muro H (m)", value=7.00, min_value=1.50, step=0.50, key="s_hmuro")
+                        params_sict['H_muro_m'] = st.number_input("Altura máxima muro H (m)", value=float(cfg_s['SICT_H_Muro_m']), min_value=1.50, step=0.50, key="s_hmuro")
                         params_sict['gamma_relleno_kNm3'] = st.number_input("γ relleno compactado (kN/m³)", value=19.0, min_value=15.0, step=0.5, key="s_gamrel")
                     with cm2:
                         params_sict['phi_relleno_deg'] = st.number_input("Ángulo fricción relleno φ (°)", value=32.0, min_value=20.0, max_value=45.0, step=1.0, key="s_phirel")
                         params_sict['beta_relleno_deg'] = st.number_input("Inclinación talud relleno β (°)", value=0.0, min_value=0.0, max_value=25.0, step=1.0, key="s_betarel")
                     with cm3:
-                        params_sict['heq_sc_m'] = st.number_input("Altura equiv. sobrecarga viva h_eq (m)", value=0.60, min_value=0.0, step=0.10, key="s_heq")
-                        params_sict['kh_sismo_muro'] = st.number_input("Coeficiente sísmico horizontal kh", value=0.12, min_value=0.0, max_value=0.50, step=0.02, key="s_khmuro")
+                        params_sict['heq_sc_m'] = st.number_input("Altura equiv. sobrecarga h_eq (m)", value=0.60, min_value=0.0, step=0.10, key="s_heq")
+                        params_sict['kh_sismo_muro'] = st.number_input("Coeficiente sísmico horizontal kh", value=float(cfg_s['SICT_kh_Sismo']), min_value=0.0, max_value=0.50, step=0.02, key="s_khmuro")
                     params_sict['c_relleno_kpa'] = 0.0
                     params_sict['kv_sismo_muro'] = 0.0
 
-            # --- ETAPA 3B: TERRAPLENES Y EXCAVACIONES ---
             if chk_s_ter:
                 with st.expander("⛰️ Estabilidad de Taludes de Excavación y Terraplenes de Acceso (TdR 1.5.7)", expanded=False):
                     ct1, ct2, ct3 = st.columns(3)
                     with ct1:
-                        params_sict['H_terr_m'] = st.number_input("Altura de terraplén de acceso (m)", value=6.50, min_value=0.50, step=0.50, key="s_hterr")
+                        params_sict['H_terr_m'] = st.number_input("Altura terraplén de acceso (m)", value=float(cfg_s['SICT_H_Terraplen_m']), min_value=0.50, step=0.50, key="s_hterr")
                         params_sict['B_corona_m'] = st.number_input("Ancho corona terraplén (m)", value=12.0, min_value=4.0, step=1.0, key="s_bcor")
                     with ct2:
-                        params_sict['talud_terr_HV'] = st.number_input("Talud de terraplén (H : 1V)", value=1.50, min_value=1.0, step=0.25, key="s_talterr")
+                        params_sict['talud_terr_HV'] = st.number_input("Talud terraplén (H : 1V)", value=1.50, min_value=1.0, step=0.25, key="s_talterr")
                         params_sict['cv_m2_anio'] = st.number_input("Coef. consolidación Cv (m²/año)", value=2.50, min_value=0.20, step=0.50, key="s_cv")
                     with ct3:
-                        params_sict['H_exc_m'] = st.number_input("Profundidad excavación H_exc (m)", value=2.40, min_value=0.50, step=0.20, key="s_hexc")
-                        params_sict['talud_exc_HV'] = st.number_input("Talud temporal corte (H : 1V) [0.58 ≈ 60°]", value=0.58, min_value=0.15, step=0.10, key="s_talexc")
+                        params_sict['H_exc_m'] = st.number_input("Profundidad excavación H_exc (m)", value=float(cfg_s['df_ref_m']), min_value=0.50, step=0.20, key="s_hexc")
+                        params_sict['talud_exc_HV'] = st.number_input("Talud temporal corte (H : 1V)", value=0.58, min_value=0.15, step=0.10, key="s_talexc")
                     params_sict['gamma_terr_kNm3'] = 19.5
 
-            # --- DATOS ADMINISTRATIVOS DEL ANEXO OFICIAL SICT ---
-            with st.expander("📋 Datos Oficiales para Cédula 'Anexo Estudio de Cimentación SICT'", expanded=False):
+            with st.expander("📋 Datos Oficiales para Minuta IV y Cédula Anexo SICT (Prellenados de Excel)", expanded=False):
                 ca1, ca2, ca3 = st.columns(3)
                 with ca1:
-                    s_contrato = st.text_input("Contrato No.", value=str(proy_dict_s.get('Contrato', 'SICT-2026-S/N')), key="s_cont")
-                    s_camino = st.text_input("Camino / Línea Ferroviaria", value=str(proy_dict_s.get('Elemento', 'Vialidad / Cruce Ferroviario')), key="s_cam")
+                    s_contrato = st.text_input("Contrato No.", value=cfg_s['SICT_Contrato'], key="s_cont")
+                    s_camino = st.text_input("Camino / Línea Ferroviaria", value=cfg_s['SICT_Camino'], key="s_cam")
                 with ca2:
-                    s_tramo = st.text_input("Tramo / Kilometraje", value=str(proy_dict_s.get('Tramo', 'Km 0+000.00')), key="s_tram")
-                    s_loc = st.text_input("Localización", value=str(proy_dict_s.get('Coordenadas', 'Puebla, Pue.')), key="s_loc")
+                    s_tramo = st.text_input("Tramo / Kilometraje", value=cfg_s['SICT_Tramo'], key="s_tram")
+                    s_loc = st.text_input("Localización", value=cfg_s['SICT_Localizacion'], key="s_loc")
                 with ca3:
-                    s_resp = st.text_input("Responsable Técnico", value="ING. ESPECIALISTA EN GEOTECNIA", key="s_resp")
-                    s_ced = st.text_input("Cédula Profesional Núm.", value="S/D", key="s_ced")
+                    s_resp = st.text_input("Responsable Técnico", value=cfg_s['SICT_Responsable_Tecnico'], key="s_resp")
+                    s_ced = st.text_input("Cédula Profesional Núm.", value=cfg_s['SICT_Cedula_Prof'], key="s_ced")
 
                 clab1, clab2, clab3 = st.columns(3)
                 with clab1:
-                    chk_cu = st.checkbox("Marcar Triaxial Consolidada (CU) en Anexo", value=False, key="s_chk_cu")
+                    chk_cu = st.checkbox("Marcar Triaxial Consolidada (CU)", value=False, key="s_chk_cu")
                 with clab2:
-                    chk_cd = st.checkbox("Marcar Triaxial Lenta (CD) en Anexo", value=False, key="s_chk_cd")
+                    chk_cd = st.checkbox("Marcar Triaxial Lenta (CD)", value=False, key="s_chk_cd")
                 with clab3:
-                    chk_torc = st.checkbox("Marcar Torcómetro de Bolsillo en Anexo", value=False, key="s_chk_torc")
+                    chk_torc = st.checkbox("Marcar Torcómetro de Bolsillo", value=False, key="s_chk_torc")
 
             config_modulos_sict = {
                 'aplica_exploracion': chk_s_exp,
@@ -1204,7 +1156,7 @@ with tab_sict:
                 'aplica_terraplenes_excavacion': chk_s_ter
             }
 
-            if st.button("Ejecutar Estudio Secuencial SICT / AASHTO", type="primary", key="btn_calc_sict"):
+            if st.button("Ejecutar Estudio SICT / AASHTO (Pre-Estructural + Minuta IV)", type="primary", key="btn_calc_sict"):
                 res_sict = ejecutar_estudio_sict_modular(df_sict_calc, naf_s, config_modulos_sict, params_sict)
                 st.session_state['res_sict_actual'] = res_sict
                 st.session_state['df_sict_pdf'] = df_sict_calc
@@ -1216,7 +1168,6 @@ with tab_sict:
                 st.markdown("---")
                 st.subheader("Resultados del Estudio Geotécnico y de Cimentación (SICT / AASHTO)")
 
-                # 0. Exploracion y Socavacion
                 if rs_all['exploracion'].get('aplica', False):
                     rexp = rs_all['exploracion']
                     st.markdown(f"**Criterios de Exploración (TdR 1.5.2):** {rexp['criterio_suspension_msg']} | {rexp['ladera_msg']}")
@@ -1230,10 +1181,9 @@ with tab_sict:
                 else:
                     st.success(f"**Socavación Hidráulica Deshabilitada (`0.00 m`):** {rsoc.get('motivo_no_aplica', '')}")
 
-                # 1. Resultados ETAPA 1: Propuesta Inicial
                 if rs_all.get('propuesta_inicial', {}).get('aplica', False):
                     pi = rs_all['propuesta_inicial']
-                    st.markdown("### Etapa 1 — Propuesta Inicial de Alternativas de Cimentación (AASHTO LRFD)")
+                    st.markdown("### Etapa 1 — Propuesta Inicial Pre-Estructural (AASHTO LRFD / Minuta IV)")
                     cp_v1, cp_v2 = st.columns(2)
                     with cp_v1:
                         st.markdown("**A. Pilas Individuales a Compresión $R_R$ (Toneladas)**")
@@ -1247,20 +1197,17 @@ with tab_sict:
                         st.markdown("**C. Rigidez Axial en Cabeza de Pila $K_v$ (t/cm)**")
                         st.dataframe(pi['mat_pila_kv_tcm'].style.format("{:.2f} t/cm"))
                     with cp_v4:
-                        st.markdown("**D. Zapatas Preliminares $q_{\\text{adm}}$ (t/m², con $D_f \\le 4.0$ m)**")
+                        st.markdown(r"**D. Zapatas Preliminares $q_{\text{adm}}$ (t/m², con $D_f \le 4.0$ m)**")
                         st.dataframe(pi['mat_zap_qadm_tm2'].style.format("{:.1f} t/m²"))
 
-                # 2. Resultados ETAPA 2: Revision Definitiva Multi-Apoyo
                 if rs_all.get('revision_definitiva', {}).get('aplica', False):
                     df_rev_ap = rs_all['revision_definitiva']['df_resumen_apoyos']
-                    st.markdown("### Etapa 2 — Revisión Definitiva por Apoyo con Descargas Estructurales")
-                    st.caption("Incluye eficiencia de grupo AASHTO 10.7.3.9 / 10.8.3.6, demanda máxima por par biaxial en esquina, asentamientos instantáneos Poulos (<=25 mm), Broms lateral, pandeo Davisson-Robinson y cotas topográficas.")
+                    st.markdown("### Etapa 2 — Revisión Definitiva Multi-Apoyo con Descargas Estructurales")
                     st.dataframe(df_rev_ap, width="stretch", hide_index=True)
 
-                # 3. Resultados ETAPA 3: Empujes Metro a Metro y Excavaciones/Terraplenes
                 if rs_all['empujes_muros'].get('aplica', False):
                     rem = rs_all['empujes_muros']
-                    st.markdown(f"### Etapa 3A — Empujes de Diseño sobre Estribos / Muros ($K_a = {rem['Ka']:.3f}$, $K_{{ae}} = {rem['Kae_mononobe']:.3f}$, $K_p = {rem['Kp']:.2f}$)")
+                    st.markdown(f"### Etapa 3A — Empujes de Diseño en Estribos / Muros ($K_a = {rem['Ka']:.3f}$, $K_{{ae}} = {rem['Kae_mononobe']:.3f}$, $K_p = {rem['Kp']:.2f}$)")
                     st.dataframe(rem['df_empujes_z'], width="stretch", hide_index=True)
 
                 if rs_all['terraplen_excavacion'].get('aplica', False):
@@ -1270,39 +1217,37 @@ with tab_sict:
                     mt1.metric("Prof. Máx. Sin Ademe", f"{rtr['H_max_sin_estab_m']:.2f} m", f"Talud {rtr['angulo_talud_deg']:.0f}°")
                     mt2.metric("FS Talud Excavación", f"{rtr['FS_talud_exc']:.2f}", "Cumple" if rtr['cumple_talud_exc'] else "Requiere ademe")
                     mt3.metric("FS Base Terraplén", f"{rtr['FS_base_terraplen']:.2f}", "Estable" if rtr['cumple_base_terraplen'] else "Mejorar")
-                    mt4.metric("Asentamiento Acceso Total", f"{rtr['asent_total_terraplen_cm']:.1f} cm", f"t90 = {rtr['t90_consolidacion_meses']:.1f} m")
+                    mt4.metric("Asentamiento Acceso", f"{rtr['asent_total_terraplen_cm']:.1f} cm", f"t90 = {rtr['t90_consolidacion_meses']:.1f} m")
                     st.info(f"**Excavación:** {rtr['recomendacion_excavacion']}  \n**Terraplén:** {rtr['mitigacion_terraplen']}")
 
-                # --- EMISIÓN DEL PDF SICT + CÉDULA ANEXO OFICIAL ---
                 st.markdown("---")
-                st.subheader("Emitir Memoria Geotécnica SICT / AASHTO y Cédula Anexo Oficial (.PDF)")
+                st.subheader("Emitir Memoria Geotécnica SICT + Minuta IV + Cédula Anexo Oficial (.PDF)")
                 datos_anexo_pdf = {
-                    'Proyecto': str(proy_dict_s.get('Proyecto', 'ESTUDIO GEOTÉCNICO Y DE CIMENTACIÓN')),
+                    'Proyecto': cfg_s['Proyecto'],
                     'Contrato': s_contrato,
                     'Tipo_Obra': tipo_cruce_sict,
                     'Camino': s_camino,
                     'Tramo': s_tramo,
                     'Localizacion': s_loc,
-                    'Sondeo': str(proy_dict_s.get('Sondeo', 'SONDEO 1')),
-                    'Fecha': str(proy_dict_s.get('Fecha', '')),
+                    'Sondeo': cfg_s['Sondeo'],
+                    'Fecha': cfg_s['Fecha'],
                     'Responsable_Tecnico': s_resp,
                     'Cedula_Prof': s_ced,
                     'Triaxial_CU': chk_cu,
                     'Triaxial_CD': chk_cd,
                     'Torcometro': chk_torc
                 }
-                logo_sict_url = str(proy_dict_s.get('LogoURL', 'logo_empresa.png')).strip()
 
-                with st.spinner("Compilando Memoria Ejecutiva SICT (2 Etapas) y Cédula Anexo Oficial..."):
+                with st.spinner("Compilando Memoria Geotécnica SICT, Consideraciones Geotécnicas, Minuta IV y Anexo Oficial..."):
                     pdf_sict_bytes = generar_memoria_sict_pdf(
-                        df_s_pdf, rs_all, pruebas_det_s, datos_anexo_pdf, logo_url=logo_sict_url
+                        df_s_pdf, rs_all, pruebas_det_s, datos_anexo_pdf, logo_url=cfg_s['LogoURL']
                     )
 
-                suf_archivo = "Etapa1_Propuesta" if not chk_s_rev else "Completo_2Etapas"
+                suf_archivo = "PreEstructural_MinutaIV" if not chk_s_rev else "Completo_2Etapas_MinutaIV"
                 st.download_button(
-                    label=f"📄 Descargar Memoria SICT ({suf_archivo}) + Cédula Anexo Oficial (.PDF)",
+                    label=f"📄 Descargar Memoria SICT ({suf_archivo}) + Anexo Oficial (.PDF)",
                     data=pdf_sict_bytes,
-                    file_name=f"Memoria_Geotecnica_SICT_AASHTO_{suf_archivo}.pdf",
+                    file_name=f"Memoria_Geotecnica_SICT_{suf_archivo}.pdf",
                     mime="application/pdf",
                     type="primary",
                     key="btn_descarga_pdf_sict"
