@@ -1127,6 +1127,13 @@ with tab_sict:
                         params_sict['talud_exc_HV'] = st.number_input("Talud temporal corte (H : 1V)", value=0.58, min_value=0.15, step=0.10, key="s_talexc")
                     params_sict['gamma_terr_kNm3'] = 19.5
 
+            st.markdown("#### 3. Hojas Opcionales del Documento PDF (Minuta IV y Anexo Oficial SICT)")
+            copt_main1, copt_main2 = st.columns(2)
+            with copt_main1:
+                chk_inc_minuta4 = st.checkbox("Incluir hoja de Minuta IV (TdR 1.5.9)", value=False, key="s_inc_minuta4")
+            with copt_main2:
+                chk_inc_anexo = st.checkbox("Incluir Cédula Anexo Oficial SICT", value=False, key="s_inc_anexo")
+
             with st.expander("📋 Datos Oficiales para Minuta IV y Cédula Anexo SICT (Prellenados de Excel)", expanded=False):
                 ca1, ca2, ca3 = st.columns(3)
                 with ca1:
@@ -1146,13 +1153,6 @@ with tab_sict:
                     chk_cd = st.checkbox("Marcar Triaxial Lenta (CD)", value=False, key="s_chk_cd")
                 with clab3:
                     chk_torc = st.checkbox("Marcar Torcómetro de Bolsillo", value=False, key="s_chk_torc")
-
-                st.markdown("**Secciones Opcionales del Documento PDF (.PDF):**")
-                copt1, copt2 = st.columns(2)
-                with copt1:
-                    chk_inc_minuta4 = st.checkbox("Incluir hoja de Minuta IV (TdR 1.5.9)", value=True, key="s_inc_minuta4")
-                with copt2:
-                    chk_inc_anexo = st.checkbox("Incluir Cédula Anexo Oficial SICT", value=True, key="s_inc_anexo")
 
             config_modulos_sict = {
                 'aplica_exploracion': chk_s_exp,
