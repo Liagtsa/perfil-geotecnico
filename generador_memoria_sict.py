@@ -1,16 +1,12 @@
 # ==============================================================================
 # MODULO: generador_memoria_sict.py
-# VERSION: 2.0.0-SICT-AASHTO-2ETAPAS-MEMORIA-ANEXO
+# VERSION: 3.0.0-SICT-AASHTO-ESTILO-MEMORIA-DETALLADA
 # DESCRIPCION:
 #   Generador ejecutivo en PDF de la Memoria Geotecnica para Puentes y Pasos
-#   (PFFCC, PSV, PIV, Rios y Viaductos) bajo flujo secuencial en 2 Etapas:
-#     - ETAPA 1: Propuesta Inicial de Capacidad de Carga (AASHTO LRFD, matrices
-#       y curvas por diametro/longitud para seleccion estructural / Minuta IV).
-#     - ETAPA 2: Revision Definitiva Multi-Apoyo con Descargas Estructurales
-#       (Grupos de Pilotes a Compresion y Tension, Poulos 1994, Broms 1964,
-#       Davisson-Robinson 1965, Cotas Topograficas m.s.n.m. y Zapatas AASHTO).
-#     - ETAPA 3: Empujes metro a metro en muros (Rankine + Mononobe-Okabe),
-#       Excavaciones, Terraplenes de Acceso, Esquemas y Cedula Anexo Oficial SICT.
+#   con formato y desglose inspirados en generador_memoria_pdf.py (2 hojas por
+#   caso representativo: desglose axial detallado + tabla de balasto/resortes
+#   metro a metro), Consideraciones Geotecnicas, y opciones configurables para
+#   incluir u omitir la Minuta IV (TdR 1.5.9) y el Anexo Oficial SICT.
 # ==============================================================================
 
 import io
@@ -104,7 +100,7 @@ def cargar_imagen_logo_sict(logo_source):
 
 
 # ==========================================================
-# 1. ENCABEZADO, PIE CON ANTEFIRMA Y HELPER DE TABLAS EXACTAS
+# 1. ENCABEZADO, PIE Y TABLAS AL ESTILO MEMORIA DETALLADA
 # ==========================================================
 def crear_encabezado_sict(fig, titulo_pagina, num_pagina, total_paginas,
                           p_proy, p_elem, p_sondeo, p_fecha, logo_url='logo_empresa.png',
@@ -139,9 +135,8 @@ def crear_encabezado_sict(fig, titulo_pagina, num_pagina, total_paginas,
 
 def _dibujar_tabla_ajustada(fig, headers, rows_data, x_left, y_top, width, max_height,
                             col_widths=None, color_header='navy', font_sz=7.2):
-    """Dibuja una tabla con bbox=[0,0,1,1] sin desbordes ni recortes y retorna su cota inferior y_bot."""
     n_f = len(rows_data)
-    h_ideal = (n_f + 1.45) * 0.0245
+    h_ideal = (n_f + 1.45) * 0.0235
     h_box = min(max_height, max(0.06, h_ideal))
     ax_t = fig.add_axes([x_left, y_top - h_box, width, h_box])
     ax_t.axis('off')
@@ -172,6 +167,73 @@ def _dibujar_tabla_ajustada(fig, headers, rows_data, x_left, y_top, width, max_h
     return y_top - h_box
 
 
+def _construir_desglose_caso_sict(df_tramos, naf_m, D_m, L_m, socavacion_total_m=0.0, fc_kgcm2=280.0):
+    """Calcula el desglose detallado de un caso (D, L) y su perfil metro a metro (kh, Kh, kv, Kv_lin)."""
+    from calculos_sict_puentes import evaluar_pila_individual_aashto_lrfd
+
+    D = float(D_m)
+    L = float(L_m)
+    z_soc = max(0.0, float(socavacion_total_m))
+    res = evaluar_pila_individual_aashto_lrfd(df_tramos, naf_m, D, L, socavacion_total_m=z_soc, fc_kgcm2=fc_kgcm2)
+
+    perim = math.pi * D
+    ap = math.pi * (D ** 2) / 4.0
+    vol = ap * L
+    z_ini = z_soc + 1.50
+    z_fin = max(z_ini, L - 1.0 * D)
+
+    # Discretizacion metro a metro (1.0 m hasta int(round(L)))
+    n_metros = max(1, int(round(L)))
+    filas_m = []
+    for m_i in range(1, n_metros + 1):
+        z_m = float(m_i)
+        tr_m = df_tramos[(df_tramos['Prof_ini'] < z_m) & (df_tramos['Prof_fin'] >= z_m)]
+        if tr_m.empty and not df_tramos.empty:
+            tr_m = df_tramos.iloc[[-1]]
+        if not tr_m.empty:
+            fila_t = tr_m.iloc[0]
+            sucs_m = str(fila_t['SUCS'])
+            tipo_m = str(fila_t['Tipo'])
+            n60_m = float(fila_t['N60']) if pd.notna(fila_t['N60']) else 20.0
+            cu_m = max(float(fila_t['c_kPa']), 6.0 * n60_m, 25.0)
+        else:
+            sucs_m, tipo_m, n60_m, cu_m = 'SM', 'Friccionante', 25.0, 50.0
+
+        z_rel = max(0.5, z_m - z_soc)
+        if z_m <= z_soc:
+            kh_val = 0.0
+        elif tipo_m == 'Cohesivo':
+            kh_val = (67.0 * cu_m) / (D * 9.81)
+        elif tipo_m == 'Roca':
+            kh_val = 25000.0 / D
+        else:
+            kh_val = (25.0 * n60_m) * (z_rel / D)
+
+        kv_val = 0.85 * kh_val if tipo_m != 'Cohesivo' else 1.20 * kh_val
+        filas_m.append({
+            'z_m': -z_m,
+            'sucs': sucs_m,
+            'tipo': tipo_m,
+            'n60': n60_m,
+            'kh': round(kh_val, 1),
+            'Kh_lin': round(kh_val * D, 1),
+            'kv': round(kv_val, 1),
+            'Kv_lin': round(kv_val * D, 1)
+        })
+
+    return {
+        'D': D, 'L': L, 'Perimetro': perim, 'Area_punta': ap,
+        'Volumen': vol, 'W_ton': res['W_neto_ton'],
+        'z_act_ini': z_ini, 'z_act_fin': z_fin,
+        'L_efec': res['L_efectiva_m'],
+        'Cf_comp_ton': res['Cf_comp_ton'], 'Cp_comp_ton': res['Cp_comp_ton'],
+        'R_comp_ton': res['R_comp_ton'],
+        'Cf_tens_ton': res['Cf_tens_ton'], 'R_tens_ton': res['R_tens_ton'],
+        'kh_prom': res['kh_prom_tm3'], 'Kv_t_cm': res['Kv_cabeza_t_cm'],
+        'filas_metro': filas_m
+    }
+
+
 # ==========================================================
 # 2. ESQUEMAS GRÁFICOS DE INGENIERÍA (DAVISSON Y MONONOBE)
 # ==========================================================
@@ -181,7 +243,7 @@ def dibujar_esquemas_sict(fig, resultados):
     r_emp = resultados.get('empujes_muros', {})
 
     ax1 = fig.add_axes([0.07, 0.44, 0.41, 0.37])
-    ax1.set_title("Modelo de Fijación Equivalente y Pandeo\n(Método de Davisson y Robinson, TdR 1.5.8)", fontsize=8.6, weight='bold')
+    ax1.set_title("Esquema Paramétrico y Fijación de Pila\n(Criterios FHWA / AASHTO / Davisson)", fontsize=8.6, weight='bold')
 
     if r_dr.get('aplica', False):
         D_v = r_dr['D_m']
@@ -197,7 +259,7 @@ def dibujar_esquemas_sict(fig, resultados):
         ax1.set_ylim(y_bot_pila - 2.0, max(y_top_col + 2.5, 3.0))
 
         ax1.axhline(0.0, color='saddlebrown', lw=1.8)
-        ax1.text(3.9, 0.3, "Desplante / Terreno (±0.00 m)", ha='right', fontsize=7.0, color='saddlebrown', weight='bold')
+        ax1.text(3.9, 0.3, "Terreno / Desplante (±0.00 m)", ha='right', fontsize=7.0, color='saddlebrown', weight='bold')
 
         if r_soc.get('aplica', False) and z_soc > 0.01:
             ax1.axhline(-z_soc, color='dodgerblue', lw=1.3, linestyle='--')
@@ -211,14 +273,7 @@ def dibujar_esquemas_sict(fig, resultados):
         y_fij = -(min(L_ent * 0.85, zf))
         ax1.axhline(y_fij, color='crimson', lw=1.3, linestyle='-.')
         ax1.plot([0], [y_fij], marker='s', color='crimson', markersize=6, zorder=5)
-        ax1.text(3.9, y_fij + 0.3, f"Fijación Aparente zf ({zf:.2f} m)", ha='right', fontsize=7.0, color='crimson', weight='bold')
-
-        x_c = -w_vis / 2 - 0.55
-        ax1.annotate('', xy=(x_c, y_top_col), xytext=(x_c, y_fij),
-                     arrowprops=dict(arrowstyle='<->', color='navy', lw=1.4))
-        ax1.text(x_c - 0.15, (y_top_col + y_fij) / 2.0,
-                 f"Leq = {r_dr['L_eq_pandeo_m']:.2f} m\n(L_min = {r_dr['L_emp_min_requerida_m']:.2f} m)",
-                 ha='right', va='center', fontsize=6.9, color='navy', weight='bold')
+        ax1.text(3.9, y_fij + 0.3, f"Fijación zf ({zf:.2f} m)", ha='right', fontsize=7.0, color='crimson', weight='bold')
 
         ax1.annotate('', xy=(0, y_top_col), xytext=(0, y_top_col + 1.6),
                      arrowprops=dict(arrowstyle='->', color='darkred', lw=2.0))
@@ -226,8 +281,18 @@ def dibujar_esquemas_sict(fig, resultados):
                  fontsize=7.1, color='darkred', weight='bold')
         ax1.axis('off')
     else:
-        ax1.text(0.5, 0.5, "Esquema Davisson-Robinson\n(Se activa al evaluar pilas en Etapa 2)",
-                 ha='center', va='center', fontsize=8.2, color='gray', style='italic')
+        # Esquema de zonas de exclusion de fuste (1.50 m superior y 1.0*D en base)
+        ax1.set_xlim(-3.5, 4.5)
+        ax1.set_ylim(-24.0, 2.5)
+        ax1.axhline(0.0, color='saddlebrown', lw=1.8)
+        ax1.text(4.2, 0.4, "N.T.N. (±0.00 m)", ha='right', fontsize=7.0, color='saddlebrown', weight='bold')
+        rect_p = patches.Rectangle((-0.6, -20.0), 1.2, 20.0, facecolor='#d9d9d9', edgecolor='black', lw=1.4)
+        ax1.add_patch(rect_p)
+        ax1.add_patch(patches.Rectangle((-0.6, -1.5), 1.2, 1.5, facecolor='#f8d7da', edgecolor='crimson', hatch='xx'))
+        ax1.text(0.85, -0.75, "Fricción anulada\n(1.50 m superior)", va='center', fontsize=6.8, color='crimson', weight='bold')
+        ax1.add_patch(patches.Rectangle((-0.6, -20.0), 1.2, 1.2, facecolor='#f8d7da', edgecolor='crimson', hatch='xx'))
+        ax1.text(0.85, -19.4, "Fricción anulada\n(1.0·D en punta)", va='center', fontsize=6.8, color='crimson', weight='bold')
+        ax1.text(0.85, -10.0, "Fricción Activa\n(L_efec)", va='center', fontsize=7.2, color='navy', weight='bold')
         ax1.axis('off')
 
     ax2 = fig.add_axes([0.55, 0.44, 0.39, 0.37])
@@ -288,14 +353,12 @@ def dibujar_pagina_anexo_oficial_sict(fig, num_pag, tot_pags, df_tramos, resulta
     contrato_str = datos_anexo.get('Contrato', 'S/N')
     ax.text(50, 94.8, f"SEGÚN CONTRATO No.:  {contrato_str}", ha='center', va='top', fontsize=8.2, weight='bold')
 
-    # I. DATOS DE LA OBRA
     ax.add_patch(patches.Rectangle((0, 81.5), 100, 11.2, fill=False, edgecolor='black', lw=0.8))
     ax.text(1.5, 91.0, "I.- DATOS DE LA OBRA", fontsize=8.0, weight='bold', color='navy')
     ax.text(2.0, 88.3, f"Tipo de obra:   {datos_anexo.get('Tipo_Obra', resultados.get('tipo_cruce', 'Puente / Paso Superior'))}", fontsize=7.6)
     ax.text(2.0, 85.8, f"Camino:         {datos_anexo.get('Camino', 'Proyecto Carretero / Ferroviario')}", fontsize=7.6)
     ax.text(2.0, 83.3, f"Tramo / Km:     {datos_anexo.get('Tramo', 'S/D')}     |     Localización: {datos_anexo.get('Localizacion', 'S/D')}", fontsize=7.6)
 
-    # II. EXPLORACIÓN Y MUESTREO
     prof_max_s = float(df_tramos['Prof_fin'].max()) if not df_tramos.empty else 0.0
     naf_v = resultados.get('naf_m', None)
     naf_txt = f"{naf_v:.2f} m" if naf_v is not None else "No se detectó hasta la máxima profundidad explorada"
@@ -307,7 +370,6 @@ def dibujar_pagina_anexo_oficial_sict(fig, num_pag, tot_pags, df_tramos, resulta
     ax.text(2.0, 73.6, f"Tipo de muestras:  {tipo_muestras}", fontsize=7.5)
     ax.text(2.0, 71.3, f"Profundidad del nivel freático (NAF):  {naf_txt}", fontsize=7.5)
 
-    # III. PRUEBAS DE LABORATORIO EFECTUADAS
     def _chk(flag):
         return "( X )" if flag else "(   )"
 
@@ -335,7 +397,6 @@ def dibujar_pagina_anexo_oficial_sict(fig, num_pag, tot_pags, df_tramos, resulta
     for idx_r, txt_r in enumerate(col_der_lab):
         ax.text(51.0, 64.8 - idx_r * 2.2, txt_r, fontsize=7.3, family='monospace')
 
-    # IV. ESTRATIGRAFÍA Y TIPO DE FORMACIÓN
     ax.add_patch(patches.Rectangle((0, 41.0), 100, 10.5, fill=False, edgecolor='black', lw=0.8))
     ax.text(1.5, 49.8, "IV.- ESTRATIGRAFÍA Y TIPO DE FORMACIÓN", fontsize=8.0, weight='bold', color='navy')
     resumen_est_list = []
@@ -346,7 +407,6 @@ def dibujar_pagina_anexo_oficial_sict(fig, num_pag, tot_pags, df_tramos, resulta
     for i_ln, ln_s in enumerate(textwrap.wrap(est_texto, width=112)[:3]):
         ax.text(2.0, 47.2 - i_ln * 2.2, ln_s, fontsize=7.2)
 
-    # V. CÁLCULOS EFECTUADOS
     cfg_m = resultados.get('config_modulos', {})
     prop_on = cfg_m.get('aplica_propuesta_inicial', True)
     rev_on = cfg_m.get('aplica_revision_definitiva', False) and resultados.get('revision_definitiva', {}).get('aplica', False)
@@ -374,7 +434,6 @@ def dibujar_pagina_anexo_oficial_sict(fig, num_pag, tot_pags, df_tramos, resulta
     for idx_c, tc_d in enumerate(calcs_der):
         ax.text(51.0, 35.2 - idx_c * 2.4, tc_d, fontsize=7.3, family='monospace')
 
-    # VI. CONCLUSIONES Y RECOMENDACIONES SINTETIZADAS
     ax.add_patch(patches.Rectangle((0, 8.5), 100, 15.0, fill=False, edgecolor='black', lw=0.8))
     ax.text(1.5, 21.8, "VI.- SÍNTESIS DE CONCLUSIONES Y RECOMENDACIONES", fontsize=8.0, weight='bold', color='navy')
 
@@ -429,18 +488,16 @@ def dibujar_pagina_anexo_oficial_sict(fig, num_pag, tot_pags, df_tramos, resulta
 
 
 # ==========================================================
-# 4. FUNCIÓN PRINCIPAL GENERADORA DEL PDF SICT / AASHTO (2 ETAPAS)
+# 4. FUNCIÓN PRINCIPAL GENERADORA DEL PDF SICT / AASHTO
+#    (ESTILO DETALLADO + OPCIONES PARA OMITIR MINUTA IV Y ANEXO)
 # ==========================================================
-def generar_memoria_sict_pdf(df_tramos, resultados, pruebas_det, datos_anexo, logo_url='logo_empresa.png'):
+def generar_memoria_sict_pdf(df_tramos, resultados, pruebas_det, datos_anexo,
+                             logo_url='logo_empresa.png',
+                             incluir_minuta4=True, incluir_anexo_sict=True):
     """
-    Compila la Memoria Geotecnica SICT / AASHTO organizando limpiamente:
-      - Marco Normativo + Exploracion TdR 1.5.2 + Socavacion TdR 1.5.6
-      - Modelo Estratigrafico Completo
-      - Etapa 1: Tablas y Graficas de Propuesta Inicial (si esta habilitada)
-      - Etapa 2: Tablas Definitivas Multi-Apoyo con Descargas Estructurales (si esta habilitada)
-      - Etapa 3: Tabla Metro a Metro de Empujes, Excavaciones y Terraplenes
-      - Esquemas y Recomendaciones Constructivas (Perforacion, Tremie, Integridad)
-      - Cedula Oficial Anexo SICT
+    Compila la Memoria Geotecnica SICT / AASHTO con desglose detallado de
+    casos y balasto metro a metro (estilo generador_memoria_pdf.py), permitiendo
+    incluir u omitir de forma independiente la Minuta IV y el Anexo Oficial SICT.
     """
     pdf_buffer = io.BytesIO()
 
@@ -449,13 +506,30 @@ def generar_memoria_sict_pdf(df_tramos, resultados, pruebas_det, datos_anexo, lo
     p_sondeo = str(datos_anexo.get('Sondeo', 'SONDEO 1'))
     p_fecha = str(datos_anexo.get('Fecha', ''))
 
-    # 1. Conteo previo exacto de paginas
     FILAS_EST_PAG = 28
     bloques_est = [df_tramos.iloc[i:i + FILAS_EST_PAG] for i in range(0, max(1, len(df_tramos)), FILAS_EST_PAG)]
 
     prop_ini = resultados.get('propuesta_inicial', {})
     tiene_etapa1 = prop_ini.get('aplica', False) and (not prop_ini.get('df_pilas', pd.DataFrame()).empty)
-    pags_etapa1 = 2 if tiene_etapa1 else 0  # 1 hoja matrices + 1 hoja curvas parametricas
+    pags_etapa1 = 2 if tiene_etapa1 else 0
+
+    # Desgloses detallados estilo generador_memoria_pdf.py (2 paginas por caso: desglose + balasto m a m)
+    desgloses_det = []
+    if tiene_etapa1:
+        df_p_all = prop_ini['df_pilas']
+        l_min_v = float(df_p_all['L_m'].min())
+        l_max_v = float(df_p_all['L_m'].max())
+        d_vals = sorted(df_p_all['D_m'].unique().tolist())
+        soc_v = resultados.get('socavacion', {}).get('soc_total_m', 0.0)
+        pares_dl = []
+        for d_i in d_vals:
+            pares_dl.append((d_i, l_max_v))
+            if l_min_v != l_max_v and (d_i, l_min_v) not in pares_dl:
+                pares_dl.append((d_i, l_min_v))
+        for d_i, l_i in pares_dl[:8]:
+            desgloses_det.append(_construir_desglose_caso_sict(df_tramos, resultados.get('naf_m'), d_i, l_i, socavacion_total_m=soc_v))
+
+    pags_desglose_det = len(desgloses_det) * 2
 
     rev_def = resultados.get('revision_definitiva', {})
     tiene_etapa2 = rev_def.get('aplica', False) and (not rev_def.get('df_resumen_apoyos', pd.DataFrame()).empty)
@@ -472,19 +546,20 @@ def generar_memoria_sict_pdf(df_tramos, resultados, pruebas_det, datos_anexo, lo
     tiene_etapa3 = r_emp.get('aplica', False) or r_ter.get('aplica', False)
     pags_etapa3 = 1 if tiene_etapa3 else 0
 
-    pags_consid_geo = 1    # Hoja de Consideraciones Geotecnicas y Deduccion de Parametros
-    pags_minuta4 = 1       # Hoja de Propuesta Tecnica para Autorizacion — Minuta IV (TdR 1.5.9)
-    pags_esquemas_rec = 1  # Hoja de esquemas + procedimientos constructivos TdR 1.5.10
-    pags_anexo = 1         # Hoja final Anexo Oficial SICT
+    pags_consid_geo = 1
+    pags_minuta4 = 1 if incluir_minuta4 else 0
+    pags_esquemas_rec = 1
+    pags_anexo = 1 if incluir_anexo_sict else 0
 
-    total_paginas = 1 + len(bloques_est) + pags_consid_geo + pags_etapa1 + pags_etapa2 + pags_etapa3 + pags_minuta4 + pags_esquemas_rec + pags_anexo
+    total_paginas = (
+        1 + len(bloques_est) + pags_consid_geo + pags_etapa1 + pags_desglose_det +
+        pags_etapa2 + pags_etapa3 + pags_minuta4 + pags_esquemas_rec + pags_anexo
+    )
 
     with PdfPages(pdf_buffer) as pdf:
         contador = 1
 
-        # --------------------------------------------------------
         # PÁGINA 1: MARCO NORMATIVO, EXPLORACIÓN Y SOCAVACIÓN
-        # --------------------------------------------------------
         fig = plt.figure(figsize=(8.5, 11))
         crear_encabezado_sict(fig, "MARCO NORMATIVO, EXPLORACIÓN Y SOCAVACIÓN",
                               contador, total_paginas, p_proy, p_elem, p_sondeo, p_fecha, logo_url=logo_url)
@@ -518,19 +593,18 @@ def generar_memoria_sict_pdf(df_tramos, resultados, pruebas_det, datos_anexo, lo
             )
 
         texto_pg1 = (
-            "1. METODOLOGÍA SECUENCIAL EN 2 ETAPAS Y MARCO NORMATIVO (SICT / AASHTO)\n"
+            "1. METODOLOGÍA DE CÁLCULO Y MARCO NORMATIVO (SICT / AASHTO LRFD)\n"
             "====================================================================================\n\n"
             f"ESTRUCTURA: {resultados.get('tipo_cruce', p_elem)}\n"
             f"ALCANCE:    {resultados.get('alcance_etapa', 'Estudio Geotécnico y de Cimentación')}\n\n"
             "A. SECUENCIA DE DISEÑO GEOTÉCNICO-ESTRUCTURAL\n"
-            "   - ETAPA 1 (Propuesta Inicial — Minuta IV SICT): Determina los catálogos paramétricos de\n"
-            "     capacidad de carga axial a compresión y tensión para pilas individuales (AASHTO LRFD,\n"
-            "     O'Neill & Reese 1999: métodos alfa y beta, anulando 1.50 m superiores y 1.0·D en punta)\n"
-            "     y zapatas superficiales preliminares (Df <= 4.00 m) junto con sus módulos de reacción.\n"
-            "   - ETAPA 2 (Revisión Definitiva Multi-Apoyo): Con las descargas reales del análisis estructural,\n"
-            "     verifica cada apoyo en grupo (eficiencia y bloque AASHTO 10.7.3.9 / 10.8.3.6), demanda en\n"
-            "     pila crítica con par biaxial, asentamientos instantáneos (Poulos 1994, lím <= 25 mm según\n"
-            "     N-PRY-CAR-8-01-004/19), resistencia lateral (Broms 1964) y pandeo (Davisson-Robinson 1965).\n\n"
+            "   - ETAPA 1 (Propuesta Inicial): Catálogos de capacidad a compresión y tensión para pilas\n"
+            "     individuales (AASHTO LRFD, O'Neill & Reese 1999: métodos alfa y beta, anulando 1.50 m\n"
+            "     superiores y 1.0·D en punta), zapatas preliminares (Df <= 4.00 m), desglose por caso y\n"
+            "     tablas de balasto/resortes metro a metro.\n"
+            "   - ETAPA 2 (Revisión Definitiva Multi-Apoyo): Verifica cada apoyo con descargas estructurales\n"
+            "     (eficiencia y bloque AASHTO 10.7.3.9 / 10.8.3.6, par biaxial, Poulos <= 25 mm, Broms,\n"
+            "     Davisson-Robinson y cotas topográficas).\n\n"
             "B. MÓDULOS HABILITADOS EN ESTA CORRIDA\n"
             f"   [ {'X' if cfg_m.get('aplica_exploracion', True) else ' '} ] Exploración TdR 1.5.2      "
             f"[ {'X' if cfg_m.get('aplica_socavacion', False) else ' '} ] Socavación TdR 1.5.6       "
@@ -543,9 +617,7 @@ def generar_memoria_sict_pdf(df_tramos, resultados, pruebas_det, datos_anexo, lo
         fig.text(0.06, 0.84, texto_pg1, va='top', ha='left', fontsize=7.6, family='monospace')
         pdf.savefig(fig); plt.close(); contador += 1
 
-        # --------------------------------------------------------
-        # PÁGINA(S) 2: MODELO ESTRATIGRÁFICO COMPLETO
-        # --------------------------------------------------------
+        # PÁGINA(S) 2: MODELO ESTRATIGRÁFICO
         for idx_e, df_sub in enumerate(bloques_est):
             fig = plt.figure(figsize=(8.5, 11))
             suf_e = f" (Parte {idx_e + 1}/{len(bloques_est)})" if len(bloques_est) > 1 else ""
@@ -577,9 +649,7 @@ def generar_memoria_sict_pdf(df_tramos, resultados, pruebas_det, datos_anexo, lo
             )
             pdf.savefig(fig); plt.close(); contador += 1
 
-        # --------------------------------------------------------
-        # PÁGINA: DESGLOSE DE CONSIDERACIONES GEOTÉCNICAS Y PARÁMETROS
-        # --------------------------------------------------------
+        # PÁGINA: DESGLOSE DE CONSIDERACIONES GEOTÉCNICAS
         fig = plt.figure(figsize=(8.5, 11))
         crear_encabezado_sict(fig, "CONSIDERACIONES GEOTÉCNICAS Y DEDUCCIÓN DE PARÁMETROS",
                               contador, total_paginas, p_proy, p_elem, p_sondeo, p_fecha, logo_url=logo_url)
@@ -638,9 +708,7 @@ def generar_memoria_sict_pdf(df_tramos, resultados, pruebas_det, datos_anexo, lo
         fig.text(0.05, min(y_bot_cg - 0.03, 0.41), txt_consideraciones, va='top', ha='left', fontsize=7.2, family='monospace')
         pdf.savefig(fig); plt.close(); contador += 1
 
-        # --------------------------------------------------------
-        # ETAPA 1: PROPUESTA INICIAL DE CAPACIDAD DE CARGA (TABLAS + GRÁFICAS)
-        # --------------------------------------------------------
+        # ETAPA 1: PROPUESTA INICIAL (MATRICES + GRÁFICAS)
         if tiene_etapa1:
             mat_c = prop_ini['mat_pila_comp_ton']
             mat_t = prop_ini['mat_pila_tens_ton']
@@ -648,7 +716,6 @@ def generar_memoria_sict_pdf(df_tramos, resultados, pruebas_det, datos_anexo, lo
             df_p_prop = prop_ini['df_pilas']
             df_z_prop = prop_ini['df_zapatas']
 
-            # --- HOJA ETAPA 1A: MATRICES DE PROPUESTA INICIAL ---
             fig = plt.figure(figsize=(8.5, 11))
             crear_encabezado_sict(fig, "ETAPA 1: PROPUESTA INICIAL DE CAPACIDAD DE CARGA (AASHTO LRFD)",
                                   contador, total_paginas, p_proy, p_elem, p_sondeo, p_fecha, logo_url=logo_url)
@@ -689,7 +756,7 @@ def generar_memoria_sict_pdf(df_tramos, resultados, pruebas_det, datos_anexo, lo
 
             pdf.savefig(fig); plt.close(); contador += 1
 
-            # --- HOJA ETAPA 1B: CURVAS DE PROPUESTA INICIAL ---
+            # Curvas Etapa 1
             fig = plt.figure(figsize=(8.5, 11))
             crear_encabezado_sict(fig, "ETAPA 1: GRÁFICAS DE CAPACIDAD POR LONGITUD Y DIÁMETRO",
                                   contador, total_paginas, p_proy, p_elem, p_sondeo, p_fecha, logo_url=logo_url)
@@ -733,9 +800,62 @@ def generar_memoria_sict_pdf(df_tramos, resultados, pruebas_det, datos_anexo, lo
 
             pdf.savefig(fig); plt.close(); contador += 1
 
-        # --------------------------------------------------------
-        # ETAPA 2: REVISIÓN DEFINITIVA MULTI-APOYO CON DESCARGAS ESTRUCTURALES
-        # --------------------------------------------------------
+        # DESGLOSE DETALLADO POR CASO + BALASTO METRO A METRO (ESTILO MEMORIA DE PILAS)
+        for idx_c, dc in enumerate(desgloses_det):
+            # Hoja 1 de cada caso: Desglose Axial
+            fig = plt.figure(figsize=(8.5, 11))
+            crear_encabezado_sict(fig, f"DESGLOSE CAPACIDAD AXIAL (Caso {idx_c + 1} de {len(desgloses_det)})",
+                                  contador, total_paginas, p_proy, p_elem, p_sondeo, p_fecha, logo_url=logo_url)
+
+            txt_dc = (
+                f"3D. MEMORIA DE CÁLCULO DETALLADA — CAPACIDAD AXIAL (Caso {idx_c + 1})\n"
+                f"====================================================================================\n"
+                f" > PILA PERFORADA: Diámetro D = {dc['D']:.2f} m | Longitud L = {dc['L']:.2f} m\n"
+                f"   Perímetro Fuste: {dc['Perimetro']:.2f} m | Área Punta (Ap): {dc['Area_punta']:.3f} m²\n"
+                f"   Volumen Concreto: {dc['Volumen']:.2f} m³ | Peso Neto (W): {dc['W_ton']:.1f} t\n"
+                f"   Zona Activa de Fuste: {dc['z_act_ini']:.2f} m a {dc['z_act_fin']:.2f} m (Longitud Efectiva = {dc['L_efec']:.2f} m)\n\n"
+                f"A. CAPACIDAD REDUCIDA POR FRICCIÓN LATERAL (AASHTO LRFD — O'Neill & Reese):\n"
+                f"   => Capacidad Reducida por Fricción a Compresión (Cf) = {dc['Cf_comp_ton']:.1f} toneladas\n\n"
+                f"B. CAPACIDAD REDUCIDA EN PUNTA (Cota de Desplante -{dc['L']:.2f} m):\n"
+                f"   => Capacidad Reducida por Punta a Compresión (Cp) = {dc['Cp_comp_ton']:.1f} toneladas\n\n"
+                f"C. ESTADO LÍMITE DE FALLA A COMPRESIÓN (R_R = Cf + Cp):\n"
+                f"   => CAPACIDAD RESISTENTE REDUCIDA TOTAL (R_R) = {dc['R_comp_ton']:.1f} TONELADAS\n\n"
+                f"D. REVISIÓN A TENSIÓN / EXTRACCIÓN (R_T = Cf_tens + 0.90·W):\n"
+                f"   - Fricción reducida a tensión: Cf_tens = {dc['Cf_tens_ton']:.1f} t (Punta Cp = 0.0 t)\n"
+                f"   => CAPACIDAD RESISTENTE A TENSIÓN (R_T) = {dc['R_tens_ton']:.1f} TONELADAS\n\n"
+                f"E. RIGIDEZ GLOBAL E INTERACCIÓN SUELO-ESTRUCTURA:\n"
+                f"   - Módulo de balasto lateral promedio en fuste: kh_prom = {dc['kh_prom']:.1f} t/m³\n"
+                f"   - Rigidez axial vertical en cabeza (resorte): Kv = {dc['Kv_t_cm']:.2f} t/cm"
+            )
+            fig.text(0.06, 0.84, txt_dc, va='top', ha='left', fontsize=8.0, family='monospace')
+            pdf.savefig(fig); plt.close(); contador += 1
+
+            # Hoja 2 de cada caso: Balasto y Resortes Metro a Metro
+            fig = plt.figure(figsize=(8.5, 11))
+            n_m_tot = len(dc['filas_metro'])
+            crear_encabezado_sict(fig, f"BALASTO Y RESORTES METRO A METRO (1 a {n_m_tot} m — Caso {idx_c + 1})",
+                                  contador, total_paginas, p_proy, p_elem, p_sondeo, p_fecha, logo_url=logo_url)
+
+            fig.text(0.05, 0.84,
+                     f"3E. COEFICIENTES DE BALASTO (kh, kv) Y RIGIDECES (Kh_lin, Kv_lin) — D = {dc['D']:.2f} m | L = {dc['L']:.1f} m",
+                     fontsize=8.0, weight='bold', color='navy')
+
+            hdr_m = ["Prof. (m)", "SUCS", "Tipo", "N60", "kh (t/m³)", "Kh lin (t/m)", "kv (t/m³)", "Kv lin (t/m)"]
+            rows_m = [
+                [
+                    f"{fm['z_m']:.2f} m", fm['sucs'], fm['tipo'][:11], f"{fm['n60']:.1f}",
+                    f"{fm['kh']:.1f}", f"{fm['Kh_lin']:.1f}", f"{fm['kv']:.1f}", f"{fm['Kv_lin']:.1f}"
+                ]
+                for fm in dc['filas_metro'][:28]
+            ]
+            _dibujar_tabla_ajustada(
+                fig, hdr_m, rows_m, x_left=0.05, y_top=0.815, width=0.90, max_height=0.73,
+                col_widths=[0.12, 0.10, 0.14, 0.09, 0.13, 0.14, 0.13, 0.15],
+                color_header='#203764', font_sz=6.9 if len(rows_m) > 20 else 7.4
+            )
+            pdf.savefig(fig); plt.close(); contador += 1
+
+        # ETAPA 2: REVISIÓN DEFINITIVA MULTI-APOYO
         if tiene_etapa2:
             for idx_b, df_chunk_ap in enumerate(bloques_apoyos):
                 fig = plt.figure(figsize=(8.5, 11))
@@ -743,7 +863,6 @@ def generar_memoria_sict_pdf(df_tramos, resultados, pruebas_det, datos_anexo, lo
                 crear_encabezado_sict(fig, f"ETAPA 2: REVISIÓN DEFINITIVA DE APOYOS ESTRUCTURALES{suf_ap}",
                                       contador, total_paginas, p_proy, p_elem, p_sondeo, p_fecha, logo_url=logo_url)
 
-                # Tabla Superior: Capacidad Definitiva Axial (Compresion + Tension) y Asentamientos Poulos
                 fig.text(0.05, 0.84, f"4A. REVISIÓN DEFINITIVA DE CAPACIDAD AXIAL (GRUPO AASHTO 10.7.3.9) Y ASENTAMIENTOS POULOS{suf_ap}",
                          fontsize=8.0, weight='bold', color='navy')
                 hdr_ap1 = [
@@ -755,16 +874,9 @@ def generar_memoria_sict_pdf(df_tramos, resultados, pruebas_det, datos_anexo, lo
                     t_crit_str = f"{ra['T_Max_Pila_Crit_ton']:.1f}" if pd.notna(ra['T_Max_Pila_Crit_ton']) else "-"
                     c_tens_str = f"{ra['Cap_Tens_Pila_Ef_ton']:.1f}" if pd.notna(ra['Cap_Tens_Pila_Ef_ton']) else "-"
                     rows_ap1.append([
-                        str(ra['Apoyo'])[:14],
-                        str(ra['Arreglo'])[:18],
-                        f"{ra['L_Total_m']:.1f}/{ra['L_Efectiva_m']:.1f}",
-                        f"{ra['V_Comp_Act_ton']:.1f}",
-                        f"{ra['Cap_Comp_Grupo_ton']:.1f}",
-                        f"{ra['T_Tens_Act_ton']:.1f}",
-                        t_crit_str,
-                        c_tens_str,
-                        f"{ra['Asentamiento_mm']:.1f}",
-                        str(ra['Estado'])
+                        str(ra['Apoyo'])[:14], str(ra['Arreglo'])[:18], f"{ra['L_Total_m']:.1f}/{ra['L_Efectiva_m']:.1f}",
+                        f"{ra['V_Comp_Act_ton']:.1f}", f"{ra['Cap_Comp_Grupo_ton']:.1f}", f"{ra['T_Tens_Act_ton']:.1f}",
+                        t_crit_str, c_tens_str, f"{ra['Asentamiento_mm']:.1f}", str(ra['Estado'])
                     ])
                 y_mid = _dibujar_tabla_ajustada(
                     fig, hdr_ap1, rows_ap1, 0.05, 0.82, 0.90, 0.34,
@@ -772,7 +884,6 @@ def generar_memoria_sict_pdf(df_tramos, resultados, pruebas_det, datos_anexo, lo
                     color_header='navy', font_sz=6.8
                 ) - 0.045
 
-                # Tabla Inferior: Control Topografico de Elevaciones + Broms Lateral + Davisson-Robinson
                 fig.text(0.05, y_mid, f"4B. CONTROL TOPOGRÁFICO DE DESPLANTE (m.s.n.m.), CARGA LATERAL (BROMS) Y PANDEO (DAVISSON){suf_ap}",
                          fontsize=8.0, weight='bold', color='#203764')
                 hdr_ap2 = [
@@ -785,31 +896,18 @@ def generar_memoria_sict_pdf(df_tramos, resultados, pruebas_det, datos_anexo, lo
                     lm_d = f"{ra['L_Min_Davisson_m']:.2f} m" if pd.notna(ra['L_Min_Davisson_m']) else "-"
                     fs_p = f"{ra['FS_Pandeo']:.1f}" if pd.notna(ra['FS_Pandeo']) else "-"
                     rows_ap2.append([
-                        str(ra['Apoyo'])[:14],
-                        f"{ra['Elev_NTN_msnm']:.2f}",
-                        f"{ra['Elev_Desplante_Zap_msnm']:.2f}",
-                        el_p,
-                        f"{ra['H_Act_ton']:.1f}",
-                        f"{ra['H_Adm_Grupo_ton']:.1f}",
-                        f"{ra['M_Max_Act_tonm']:.1f}",
-                        f"{ra['M_Adm_Grupo_tonm']:.1f}",
-                        lm_d,
-                        fs_p
+                        str(ra['Apoyo'])[:14], f"{ra['Elev_NTN_msnm']:.2f}", f"{ra['Elev_Desplante_Zap_msnm']:.2f}",
+                        el_p, f"{ra['H_Act_ton']:.1f}", f"{ra['H_Adm_Grupo_ton']:.1f}", f"{ra['M_Max_Act_tonm']:.1f}",
+                        f"{ra['M_Adm_Grupo_tonm']:.1f}", lm_d, fs_p
                     ])
                 _dibujar_tabla_ajustada(
                     fig, hdr_ap2, rows_ap2, 0.05, y_mid - 0.015, 0.90, 0.34,
                     col_widths=[0.11, 0.10, 0.11, 0.11, 0.08, 0.10, 0.09, 0.11, 0.10, 0.09],
                     color_header='#203764', font_sz=6.8
                 )
-
-                fig.text(0.05, 0.06,
-                         "Nota Normativa SICT: Los asentamientos instantáneos se verifican contra el límite de 25.0 mm del inciso E.3.45 (N·PRY·CAR·8·01·004/19).",
-                         fontsize=7.1, style='italic', color='darkgreen', weight='bold')
                 pdf.savefig(fig); plt.close(); contador += 1
 
-        # --------------------------------------------------------
-        # ETAPA 3: EMPUJES METRO A METRO EN MUROS, EXCAVACIONES Y TERRAPLENES
-        # --------------------------------------------------------
+        # ETAPA 3: EMPUJES METRO A METRO, EXCAVACIONES Y TERRAPLENES
         if tiene_etapa3:
             fig = plt.figure(figsize=(8.5, 11))
             crear_encabezado_sict(fig, "EMPUJE DE DISEÑO EN MUROS, TALUDES Y TERRAPLENES",
@@ -848,92 +946,83 @@ def generar_memoria_sict_pdf(df_tramos, resultados, pruebas_det, datos_anexo, lo
 
             pdf.savefig(fig); plt.close(); contador += 1
 
-        # --------------------------------------------------------
-        # PÁGINA: PROPUESTA TÉCNICA PARA AUTORIZACIÓN — MINUTA IV (TdR 1.5.9)
-        # --------------------------------------------------------
-        fig = plt.figure(figsize=(8.5, 11))
-        crear_encabezado_sict(fig, "PROPUESTA DE CIMENTACIÓN PARA AUTORIZACIÓN — MINUTA IV (TdR 1.5.9)",
-                              contador, total_paginas, p_proy, p_elem, p_sondeo, p_fecha, logo_url=logo_url,
-                              mostrar_antefirma=False)
+        # PÁGINA OPCIONAL: MINUTA IV (TdR 1.5.9)
+        if incluir_minuta4:
+            fig = plt.figure(figsize=(8.5, 11))
+            crear_encabezado_sict(fig, "PROPUESTA DE CIMENTACIÓN PARA AUTORIZACIÓN — MINUTA IV (TdR 1.5.9)",
+                                  contador, total_paginas, p_proy, p_elem, p_sondeo, p_fecha, logo_url=logo_url,
+                                  mostrar_antefirma=False)
 
-        ax_m4 = fig.add_axes([0.05, 0.04, 0.90, 0.81])
-        ax_m4.set_xlim(0, 100)
-        ax_m4.set_ylim(0, 100)
-        ax_m4.axis('off')
+            ax_m4 = fig.add_axes([0.05, 0.04, 0.90, 0.81])
+            ax_m4.set_xlim(0, 100)
+            ax_m4.set_ylim(0, 100)
+            ax_m4.axis('off')
 
-        ax_m4.text(50, 98.0, "MINUTA IV — PROPUESTA Y AUTORIZACIÓN DEL TIPO DE CIMENTACIÓN (TdR 1.5.9)",
-                   ha='center', va='top', fontsize=9.2, weight='bold', color='navy')
-        ax_m4.text(50, 94.8, f"CONTRATO No.: {datos_anexo.get('Contrato', 'S/N')}   |   OBRA: {p_elem[:55]}",
-                   ha='center', va='top', fontsize=7.8, weight='bold')
+            ax_m4.text(50, 98.0, "MINUTA IV — PROPUESTA Y AUTORIZACIÓN DEL TIPO DE CIMENTACIÓN (TdR 1.5.9)",
+                       ha='center', va='top', fontsize=9.2, weight='bold', color='navy')
+            ax_m4.text(50, 94.8, f"CONTRATO No.: {datos_anexo.get('Contrato', 'S/N')}   |   OBRA: {p_elem[:55]}",
+                       ha='center', va='top', fontsize=7.8, weight='bold')
 
-        # Cuadro comparativo de alternativas pre-estructurales
-        pi_m4 = resultados.get('propuesta_inicial', {})
-        if pi_m4.get('aplica', False) and not pi_m4.get('df_pilas', pd.DataFrame()).empty:
-            r_p_min = pi_m4['df_pilas']['R_comp_ton'].min()
-            r_p_max = pi_m4['df_pilas']['R_comp_ton'].max()
-            t_p_min = pi_m4['df_pilas']['R_tens_ton'].min()
-            t_p_max = pi_m4['df_pilas']['R_tens_ton'].max()
-            res_pilas_txt = f"Compresión: {r_p_min:.0f} a {r_p_max:.0f} t/pila | Tensión: {t_p_min:.0f} a {t_p_max:.0f} t/pila"
-        else:
-            res_pilas_txt = "Evaluada en Etapa 2 según arreglo definitivo"
+            pi_m4 = resultados.get('propuesta_inicial', {})
+            if pi_m4.get('aplica', False) and not pi_m4.get('df_pilas', pd.DataFrame()).empty:
+                r_p_min, r_p_max = pi_m4['df_pilas']['R_comp_ton'].min(), pi_m4['df_pilas']['R_comp_ton'].max()
+                t_p_min, t_p_max = pi_m4['df_pilas']['R_tens_ton'].min(), pi_m4['df_pilas']['R_tens_ton'].max()
+                res_pilas_txt = f"Compresión: {r_p_min:.0f} a {r_p_max:.0f} t/pila | Tensión: {t_p_min:.0f} a {t_p_max:.0f} t/pila"
+            else:
+                res_pilas_txt = "Evaluada en Etapa 2 según arreglo definitivo"
 
-        if pi_m4.get('aplica', False) and not pi_m4.get('df_zapatas', pd.DataFrame()).empty:
-            q_z_min = pi_m4['df_zapatas']['q_adm_kgcm2'].min()
-            q_z_max = pi_m4['df_zapatas']['q_adm_kgcm2'].max()
-            res_zap_txt = f"q_adm = {q_z_min:.2f} a {q_z_max:.2f} kg/cm² (para Df <= 4.00 m)"
-        else:
-            res_zap_txt = "Sujeta a revisión de Df <= 4.00 m"
+            if pi_m4.get('aplica', False) and not pi_m4.get('df_zapatas', pd.DataFrame()).empty:
+                q_z_min, q_z_max = pi_m4['df_zapatas']['q_adm_kgcm2'].min(), pi_m4['df_zapatas']['q_adm_kgcm2'].max()
+                res_zap_txt = f"q_adm = {q_z_min:.2f} a {q_z_max:.2f} kg/cm² (para Df <= 4.00 m)"
+            else:
+                res_zap_txt = "Sujeta a revisión de Df <= 4.00 m"
 
-        soc_m4_txt = f"Socavación Total = {r_soc['soc_total_m']:.2f} m" if r_soc.get('aplica', False) else "No aplica (Cruce sin cauce fluvial, 0.00 m)"
+            soc_m4_txt = f"Socavación Total = {r_soc['soc_total_m']:.2f} m" if r_soc.get('aplica', False) else "No aplica (Cruce sin cauce fluvial, 0.00 m)"
 
-        hdr_m4 = ["Alternativa de Cimentación", "Rango de Capacidad (AASHTO)", "Condición de Aplicación (TdR 1.5.8 / 1.5.9)", "Viabilidad"]
-        rows_m4 = [
-            ["1. Cimentación Superficial\n(Zapatas Aisladas / Estribos)", res_zap_txt,
-             "Desplante en terreno natural firme a Df <= 4.00 m,\nlibre de rellenos y verificando volteo/deslizamiento.", "APLICABLE\n(Cargas moderadas)"],
-            ["2. Cimentación Profunda\n(Pilas Perforadas / Grupos)", res_pilas_txt,
-             "Recomendada ante cargas elevadas, tensiones altas,\nvolteo sísmico o desplante firme > 4.00 m.", "RECOMENDADA\n(Apoyos críticos)"],
-        ]
-        _dibujar_tabla_ajustada(
-            fig, hdr_m4, rows_m4, x_left=0.05, y_top=0.78, width=0.90, max_height=0.22,
-            col_widths=[0.24, 0.24, 0.36, 0.16], color_header='navy', font_sz=7.2
-        )
+            hdr_m4 = ["Alternativa de Cimentación", "Rango de Capacidad (AASHTO)", "Condición de Aplicación (TdR 1.5.8 / 1.5.9)", "Viabilidad"]
+            rows_m4 = [
+                ["1. Cimentación Superficial\n(Zapatas Aisladas / Estribos)", res_zap_txt,
+                 "Desplante en terreno natural firme a Df <= 4.00 m,\nlibre de rellenos y verificando volteo/deslizamiento.", "APLICABLE\n(Cargas moderadas)"],
+                ["2. Cimentación Profunda\n(Pilas Perforadas / Grupos)", res_pilas_txt,
+                 "Recomendada ante cargas elevadas, tensiones altas,\nvolteo sísmico o desplante firme > 4.00 m.", "RECOMENDADA\n(Apoyos críticos)"],
+            ]
+            _dibujar_tabla_ajustada(
+                fig, hdr_m4, rows_m4, x_left=0.05, y_top=0.78, width=0.90, max_height=0.22,
+                col_widths=[0.24, 0.24, 0.36, 0.16], color_header='navy', font_sz=7.2
+            )
 
-        # Bloque de dictamen y acuerdos de Minuta IV
-        ax_m4.add_patch(patches.Rectangle((0, 26.0), 100, 38.0, fill=False, edgecolor='black', lw=0.8))
-        ax_m4.text(1.5, 62.0, "RESUMEN TÉCNICO Y ACUERDO DE SELECCIÓN DE CIMENTACIÓN (TdR 1.5.9):", fontsize=8.0, weight='bold', color='navy')
-        texto_m4 = (
-            f"1. Condiciones del sitio: Exploración {p_sondeo} (prof. máx. {float(df_tramos['Prof_fin'].max()):.2f} m) | {soc_m4_txt}.\n"
-            f"2. Propuesta Geotécnica Pre-Estructural: Con base en el perfil estratigráfico y los análisis AASHTO LRFD\n"
-            f"   de la Etapa 1, se someten a consideración de LA DEPENDENCIA y del área de Estructuras las alternativas\n"
-            f"   de cimentación superficial (Df <= 4.00 m) y profunda (pilas perforadas / grupos de pilas) contenidas\n"
-            f"   en la presente memoria, junto con sus módulos de reacción (ks, kh, Kv) y empujes en estribos.\n"
-            f"3. Resolución / Tipo de Cimentación Autorizado por Apoyo:\n"
-            f"   ____________________________________________________________________________________________________\n"
-            f"   ____________________________________________________________________________________________________\n"
-            f"   ____________________________________________________________________________________________________\n\n"
-            f"4. Observaciones y compromisos para Proyecto Constructivo (Etapa VI): Una vez validada la presente Minuta IV\n"
-            f"   por todas las partes, se procederá a la revisión definitiva de descargas estructurales por apoyo."
-        )
-        ax_m4.text(2.0, 59.0, texto_m4, va='top', ha='left', fontsize=7.1, family='monospace')
+            ax_m4.add_patch(patches.Rectangle((0, 26.0), 100, 38.0, fill=False, edgecolor='black', lw=0.8))
+            ax_m4.text(1.5, 62.0, "RESUMEN TÉCNICO Y ACUERDO DE SELECCIÓN DE CIMENTACIÓN (TdR 1.5.9):", fontsize=8.0, weight='bold', color='navy')
+            texto_m4 = (
+                f"1. Condiciones del sitio: Exploración {p_sondeo} (prof. máx. {float(df_tramos['Prof_fin'].max()):.2f} m) | {soc_m4_txt}.\n"
+                f"2. Propuesta Geotécnica Pre-Estructural: Con base en el perfil estratigráfico y los análisis AASHTO LRFD\n"
+                f"   de la Etapa 1, se someten a consideración de LA DEPENDENCIA y del área de Estructuras las alternativas\n"
+                f"   de cimentación superficial (Df <= 4.00 m) y profunda (pilas perforadas / grupos de pilas) contenidas\n"
+                f"   en la presente memoria, junto con sus módulos de reacción (ks, kh, Kv) y empujes en estribos.\n"
+                f"3. Resolución / Tipo de Cimentación Autorizado por Apoyo:\n"
+                f"   ____________________________________________________________________________________________________\n"
+                f"   ____________________________________________________________________________________________________\n"
+                f"   ____________________________________________________________________________________________________\n\n"
+                f"4. Observaciones y compromisos para Proyecto Constructivo (Etapa VI): Una vez validada la presente Minuta IV\n"
+                f"   por todas las partes, se procederá a la revisión definitiva de descargas estructurales por apoyo."
+            )
+            ax_m4.text(2.0, 59.0, texto_m4, va='top', ha='left', fontsize=7.1, family='monospace')
 
-        # Bloque oficial de firmas (LA DEPENDENCIA y LA CONTRATISTA)
-        resp_nom = datos_anexo.get('Responsable_Tecnico', 'ING. ESPECIALISTA EN GEOTECNIA')
-        resp_ced = datos_anexo.get('Cedula_Prof', 'S/D')
+            resp_nom = datos_anexo.get('Responsable_Tecnico', 'ING. ESPECIALISTA EN GEOTECNIA')
+            resp_ced = datos_anexo.get('Cedula_Prof', 'S/D')
 
-        ax_m4.text(25, 19.5, "POR 'LA DEPENDENCIA' (SICT)", ha='center', fontsize=8.0, weight='bold', color='navy')
-        ax_m4.plot([6, 44], [9.5, 9.5], color='black', lw=1.0)
-        ax_m4.text(25, 7.2, "NOMBRE, CARGO Y FIRMA DE AUTORIZACIÓN", ha='center', fontsize=7.0)
+            ax_m4.text(25, 19.5, "POR 'LA DEPENDENCIA' (SICT)", ha='center', fontsize=8.0, weight='bold', color='navy')
+            ax_m4.plot([6, 44], [9.5, 9.5], color='black', lw=1.0)
+            ax_m4.text(25, 7.2, "NOMBRE, CARGO Y FIRMA DE AUTORIZACIÓN", ha='center', fontsize=7.0)
 
-        ax_m4.text(75, 19.5, "POR 'LA CONTRATISTA' (RESPONSABLE TÉCNICO)", ha='center', fontsize=8.0, weight='bold', color='navy')
-        ax_m4.plot([56, 94], [9.5, 9.5], color='black', lw=1.0)
-        ax_m4.text(75, 7.2, f"{resp_nom}", ha='center', fontsize=7.2, weight='bold')
-        ax_m4.text(75, 4.8, f"CÉD. PROF. NÚM.: {resp_ced}", ha='center', fontsize=6.9, color='dimgray')
+            ax_m4.text(75, 19.5, "POR 'LA CONTRATISTA' (RESPONSABLE TÉCNICO)", ha='center', fontsize=8.0, weight='bold', color='navy')
+            ax_m4.plot([56, 94], [9.5, 9.5], color='black', lw=1.0)
+            ax_m4.text(75, 7.2, f"{resp_nom}", ha='center', fontsize=7.2, weight='bold')
+            ax_m4.text(75, 4.8, f"CÉD. PROF. NÚM.: {resp_ced}", ha='center', fontsize=6.9, color='dimgray')
 
-        pdf.savefig(fig); plt.close(); contador += 1
+            pdf.savefig(fig); plt.close(); contador += 1
 
-        # --------------------------------------------------------
-        # PÁGINA DE ESQUEMAS Y RECOMENDACIONES CONSTRUCTIVAS (TdR 1.5.10)
-        # --------------------------------------------------------
+        # PÁGINA DE ESQUEMAS Y RECOMENDACIONES CONSTRUCTIVAS
         fig = plt.figure(figsize=(8.5, 11))
         crear_encabezado_sict(fig, "ESQUEMAS Y RECOMENDACIONES DE CONSTRUCCIÓN (TdR 1.5.10)",
                               contador, total_paginas, p_proy, p_elem, p_sondeo, p_fecha, logo_url=logo_url)
@@ -957,13 +1046,12 @@ def generar_memoria_sict_pdf(df_tramos, resultados, pruebas_det, datos_anexo, lo
         fig.text(0.05, 0.38, nota_proc, va='top', ha='left', fontsize=7.4, family='monospace')
         pdf.savefig(fig); plt.close(); contador += 1
 
-        # --------------------------------------------------------
-        # PÁGINA FINAL: CÉDULA ANEXO OFICIAL SICT
-        # --------------------------------------------------------
-        fig = plt.figure(figsize=(8.5, 11))
-        dibujar_pagina_anexo_oficial_sict(
-            fig, contador, total_paginas, df_tramos, resultados, pruebas_det, datos_anexo, logo_url
-        )
-        pdf.savefig(fig); plt.close(); contador += 1
+        # PÁGINA OPCIONAL: CÉDULA ANEXO OFICIAL SICT
+        if incluir_anexo_sict:
+            fig = plt.figure(figsize=(8.5, 11))
+            dibujar_pagina_anexo_oficial_sict(
+                fig, contador, total_paginas, df_tramos, resultados, pruebas_det, datos_anexo, logo_url
+            )
+            pdf.savefig(fig); plt.close(); contador += 1
 
     return pdf_buffer.getvalue()

@@ -1147,6 +1147,13 @@ with tab_sict:
                 with clab3:
                     chk_torc = st.checkbox("Marcar Torcómetro de Bolsillo", value=False, key="s_chk_torc")
 
+                st.markdown("**Secciones Opcionales del Documento PDF (.PDF):**")
+                copt1, copt2 = st.columns(2)
+                with copt1:
+                    chk_inc_minuta4 = st.checkbox("Incluir hoja de Minuta IV (TdR 1.5.9)", value=True, key="s_inc_minuta4")
+                with copt2:
+                    chk_inc_anexo = st.checkbox("Incluir Cédula Anexo Oficial SICT", value=True, key="s_inc_anexo")
+
             config_modulos_sict = {
                 'aplica_exploracion': chk_s_exp,
                 'aplica_socavacion': chk_s_soc,
@@ -1238,9 +1245,12 @@ with tab_sict:
                     'Torcometro': chk_torc
                 }
 
-                with st.spinner("Compilando Memoria Geotécnica SICT, Consideraciones Geotécnicas, Minuta IV y Anexo Oficial..."):
+                with st.spinner("Compilando Memoria Geotécnica SICT estilo detallado..."):
                     pdf_sict_bytes = generar_memoria_sict_pdf(
-                        df_s_pdf, rs_all, pruebas_det_s, datos_anexo_pdf, logo_url=cfg_s['LogoURL']
+                        df_s_pdf, rs_all, pruebas_det_s, datos_anexo_pdf,
+                        logo_url=cfg_s['LogoURL'],
+                        incluir_minuta4=chk_inc_minuta4,
+                        incluir_anexo_sict=chk_inc_anexo
                     )
 
                 suf_archivo = "PreEstructural_MinutaIV" if not chk_s_rev else "Completo_2Etapas_MinutaIV"
