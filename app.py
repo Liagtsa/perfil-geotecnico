@@ -16,12 +16,14 @@ from PIL import Image
 from cimentaciones_profundas import (
     procesar_sondeo_completo,
     generar_matrices_parametricas,
-    obtener_tabla_balasto_metro_a_metro
+    obtener_tabla_balasto_metro_a_metro,
+    calcular_asentamiento_elastico_pila_ntc
 )
 from generador_memoria_pdf import generar_memoria_calculo_pdf
 from cimentaciones_superficiales import (
     procesar_datos_superficiales,
-    generar_analisis_parametrico_zapatas
+    generar_analisis_parametrico_zapatas,
+    calcular_asentamientos_cargas_estructurales_ntc
 )
 from generador_memoria_zapatas import generar_memoria_zapatas_pdf, cargar_imagen_logo
 from calculos_sict_puentes import procesar_sondeo_sict, extraer_config_sict_desde_proyecto, ejecutar_estudio_sict_modular
@@ -588,6 +590,37 @@ with tab_cimentacion:
                 )
 
                 st.markdown("---")
+                st.subheader("7. Cálculo de Asentamientos Elásticos bajo Cargas del Estructurista (Monopila vs. Grupo — NTC-CDMX 2023)")
+                st.caption(
+                    "Evalúa el asentamiento elástico de servicio bajo las cargas dadas por el estructurista para decidir entre **pila única (monopila)** o **grupo de pilas**."
+                )
+
+                ca_p1, ca_p2, ca_p3, ca_p4 = st.columns(4)
+                with ca_p1:
+                    p_est_carga = st.number_input("Carga actuante del estructurista (t)", value=650.0, min_value=1.0, step=25.0, key="p_est_carga_ntc")
+                with ca_p2:
+                    p_est_cond = st.selectbox("Condición de carga", options=["Tensión / Extracción", "Compresión"], index=0, key="p_est_cond_ntc")
+                with ca_p3:
+                    p_est_n_grp = st.number_input("Núm. de pilas en grupo (1 = Monopila)", value=4, min_value=1, max_value=16, step=1, key="p_est_ngrp_ntc")
+                with ca_p4:
+                    p_est_se_lim = st.number_input("Límite de servicio NTC (cm)", value=2.50, min_value=0.50, max_value=15.0, step=0.25, key="p_est_selim_ntc")
+
+                if st.button("Comparar Asentamiento Elástico (Monopila vs. Grupo)", type="secondary", key="btn_calc_asent_pilas_ntc"):
+                    es_t_b = ("Tensión" in p_est_cond)
+                    r_mono = calcular_asentamiento_elastico_pila_ntc(
+                        df_tramos, naf_val, sel_d, sel_l, p_est_carga,
+                        es_tension=es_t_b, n_pilas_grupo=1, se_max_cm=p_est_se_lim
+                    )
+                    r_grp = calcular_asentamiento_elastico_pila_ntc(
+                        df_tramos, naf_val, sel_d, sel_l, p_est_carga,
+                        es_tension=es_t_b, n_pilas_grupo=int(p_est_n_grp), se_max_cm=p_est_se_lim
+                    )
+                    st.session_state['df_asent_pilas_ntc'] = pd.DataFrame([r_mono, r_grp])
+
+                if 'df_asent_pilas_ntc' in st.session_state:
+                    st.dataframe(st.session_state['df_asent_pilas_ntc'], width="stretch", hide_index=True)
+
+                st.markdown("---")
                 st.subheader("Generar Memoria de Cálculo en PDF")
                 st.caption("Memoria geotécnica formal con desglose estrato por estrato, balasto metro a metro y matrices de diseño.")
 
@@ -877,6 +910,88 @@ with tab_zapatas:
                     st.dataframe(az['mat_ais_se_final_cm'].style.format("{:.2f} cm"))
 
                 st.markdown("---")
+                st.subheader("2. Cálculo de Asentamientos Elásticos bajo Cargas del Estructurista (NTC-CDMX 2023)")
+                st.caption(
+                    "Captura las reacciones de servicio/diseño entregadas por el estructurista ($V$, $H$, $M_x$, $M_y$) y la geometría de cada zapata "
+                    "para calcular su asentamiento elástico real ($S_e$) y contrastarlo contra el límite de Estado Límite de Servicio de las NTC-CDMX 2023."
+                )
+
+                if 'df_cargas_zap_default' not in st.session_state:
+                    st.session_state['df_cargas_zap_default'] = pd.DataFrame([
+                        {
+                            'Elemento': 'Zapata Aislada ZA-1',
+                            'Tipo_Zapata': 'Aislada',
+                            'Df_m': 2.00,
+                            'B_m': 2.20,
+                            'L_m': 2.20,
+                            'V_ton': 185.0,
+                            'H_ton': 18.0,
+                            'Mx_tonm': 10.0,
+                            'My_tonm': 25.0
+                        },
+                        {
+                            'Elemento': 'Zapata Corrida ZC-1',
+                            'Tipo_Zapata': 'Corrida',
+                            'Df_m': 1.80,
+                            'B_m': 1.00,
+                            'L_m': 6.00,
+                            'V_ton': 95.0,
+                            'H_ton': 8.0,
+                            'Mx_tonm': 5.0,
+                            'My_tonm': 12.0
+                        }
+                    ])
+
+                df_cargas_edit_z = st.data_editor(
+                    st.session_state['df_cargas_zap_default'],
+                    num_rows="dynamic",
+                    column_config={
+                        "Elemento": st.column_config.TextColumn("Elemento / Eje"),
+                        "Tipo_Zapata": st.column_config.SelectboxColumn("Tipo", options=["Aislada", "Corrida"]),
+                        "Df_m": st.column_config.NumberColumn("Df (m)", min_value=0.3, step=0.2, format="%.2f"),
+                        "B_m": st.column_config.NumberColumn("B (m)", min_value=0.4, step=0.2, format="%.2f"),
+                        "L_m": st.column_config.NumberColumn("L (m)", min_value=0.4, step=0.5, format="%.2f"),
+                        "V_ton": st.column_config.NumberColumn("V Vertical (t)", min_value=0.1, step=10.0, format="%.1f"),
+                        "H_ton": st.column_config.NumberColumn("H Cortante (t)", min_value=0.0, step=2.0, format="%.1f"),
+                        "Mx_tonm": st.column_config.NumberColumn("Mx (t·m)", step=5.0, format="%.1f"),
+                        "My_tonm": st.column_config.NumberColumn("My (t·m)", step=5.0, format="%.1f"),
+                    },
+                    width="stretch",
+                    key="editor_cargas_est_zapatas"
+                )
+
+                if st.button("Calcular Asentamientos con Cargas Estructurales (NTC-CDMX 2023)", type="secondary", key="btn_calc_asent_est_zap"):
+                    df_res_asent_est = calcular_asentamientos_cargas_estructurales_ntc(
+                        df_z_pdf,
+                        naf_z,
+                        df_cargas_edit_z,
+                        nu=nu_zap,
+                        es_colindante=es_colindante_zap,
+                        se_max_corrida_cm=se_max_corr_mm / 10.0,
+                        se_max_aislada_cm=se_max_ais_mm / 10.0
+                    )
+                    st.session_state['df_res_asent_est_zap'] = df_res_asent_est
+
+                if 'df_res_asent_est_zap' in st.session_state:
+                    df_ae_v = st.session_state['df_res_asent_est_zap']
+                    st.dataframe(
+                        df_ae_v.style.format({
+                            'V_ton': '{:.1f} t',
+                            'H_ton': '{:.1f} t',
+                            'e_B_m': '{:.3f} m',
+                            'q_act_kgcm2': '{:.2f} kg/cm²',
+                            'Es_bulbo_kgcm2': '{:.1f} kg/cm²',
+                            'Se_mm': '{:.1f} mm',
+                            'Se_cm': '{:.2f} cm',
+                            'Limite_NTC_mm': '{:.1f} mm',
+                            'Uso_Limite_pct': '{:.1f}%',
+                            'ks_act_tm3': '{:.0f} t/m³'
+                        }),
+                        width="stretch",
+                        hide_index=True
+                    )
+
+                st.markdown("---")
                 st.subheader("Generar Memoria de Cálculo de Zapatas en PDF")
                 try:
                     archivo_zap.seek(0)
@@ -893,7 +1008,8 @@ with tab_zapatas:
 
                 with st.spinner("Compilando memoria ejecutiva de zapatas en PDF..."):
                     pdf_zap_bytes = generar_memoria_zapatas_pdf(
-                        df_z_pdf, az, nm_proy_z, nm_elem_z, nm_sondeo_z, nm_fecha_z, logo_url=nm_logo_z
+                        df_z_pdf, az, nm_proy_z, nm_elem_z, nm_sondeo_z, nm_fecha_z,
+                        logo_url=nm_logo_z, df_asent_est=st.session_state.get('df_res_asent_est_zap', None)
                     )
 
                 st.download_button(
@@ -1170,7 +1286,7 @@ with tab_sict:
 
             if 'res_sict_actual' in st.session_state:
                 rs_all = st.session_state['res_sict_actual']
-                df_s_pdf = st.session_state.get('df_sict_pdf', df_sict_calc)
+                df_s_pdf = st.session_state.get('df_sict_pdf', df_s_calc)
 
                 st.markdown("---")
                 st.subheader("Resultados del Estudio Geotécnico y de Cimentación (SICT / AASHTO)")

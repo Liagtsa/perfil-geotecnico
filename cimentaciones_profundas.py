@@ -490,3 +490,60 @@ def obtener_tabla_balasto_metro_a_metro(df_tramos, naf_m, diametro_m, longitud_m
         })
         
     return pd.DataFrame(filas)
+
+def calcular_asentamiento_elastico_pila_ntc(df_tramos, naf_m, diametro_m, longitud_m,
+                                           carga_act_ton, es_tension=False,
+                                           n_pilas_grupo=1, sep_D=3.0,
+                                           fc_kg_cm2=300.0, nu=0.30, se_max_cm=2.5):
+    """
+    Calcula el asentamiento elastico de servicio (NTC-CDMX 2023) bajo una carga
+    dada por el estructurista, comparando ya sea una pila individual (monopila)
+    o un grupo de pilas (mediante diametro equivalente de grupo).
+    """
+    res_p = evaluar_pila(df_tramos, naf_m, diametro_m, longitud_m, fc_kg_cm2=fc_kg_cm2)
+    Es_kgcm2 = max(120.0, res_p['kh_t_m3'] * 0.035)
+    Es_tm2 = Es_kgcm2 * 10.0
+    Ec_tm2 = (14000.0 * math.sqrt(max(fc_kg_cm2, 200.0))) * 10.0
+
+    P_abs = abs(float(carga_act_ton))
+    n_g = max(1, int(n_pilas_grupo))
+    D = max(0.40, float(diametro_m))
+    L = max(3.0, float(longitud_m))
+
+    if n_g == 1:
+        Ap_m2 = math.pi * (D ** 2) / 4.0
+        factor_EA = 0.25 if es_tension else 1.00
+        l_ef = max(1.0, res_p['Long_fuste_activa_m'])
+        acort_fuste_m = (P_abs * l_ef) / max(Ap_m2 * Ec_tm2 * factor_EA, 1.0)
+        factor_punta = 0.30 if es_tension else 1.00
+        desp_punta_m = factor_punta * (P_abs * (1.0 - nu**2)) / max(0.85 * D * Es_tm2, 1.0)
+        se_mm = (acort_fuste_m + desp_punta_m) * 1000.0
+        d_equiv = D
+    else:
+        S_m = float(sep_D) * D
+        nx = int(math.ceil(math.sqrt(n_g)))
+        ny = int(math.ceil(n_g / nx))
+        Bg = (nx - 1) * S_m + D
+        Lg = (ny - 1) * S_m + D
+        d_equiv = 1.27 * math.sqrt(Bg * Lg)
+        Is_g = 0.16 if es_tension else 0.12
+        se_mm = ((P_abs * Is_g) / max(d_equiv * Es_tm2, 1.0)) * 1000.0
+
+    se_cm = se_mm / 10.0
+    kv_act_t_cm = P_abs / max(se_cm, 1e-4)
+    uso_pct = (se_cm / max(float(se_max_cm), 0.01)) * 100.0
+
+    return {
+        'n_pilas': n_g,
+        'diametro_m': round(D, 2),
+        'longitud_m': round(L, 2),
+        'd_equiv_m': round(d_equiv, 2),
+        'condicion_carga': 'Tensión / Extracción' if es_tension else 'Compresión',
+        'carga_act_ton': round(P_abs, 1),
+        'Se_mm': round(se_mm, 1),
+        'Se_cm': round(se_cm, 2),
+        'Se_max_cm': round(float(se_max_cm), 2),
+        'Uso_Se_pct': round(uso_pct, 1),
+        'Kv_act_t_cm': round(kv_act_t_cm, 1),
+        'Cumple_NTC_2023': (se_cm <= float(se_max_cm))
+    }
